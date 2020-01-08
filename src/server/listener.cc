@@ -37,25 +37,15 @@
 namespace Pistache {
 namespace Tcp {
 
-namespace {
-    volatile sig_atomic_t g_listen_fd = -1;
-
-    void closeListener() {
-        if (g_listen_fd != -1) {
-            ::close(g_listen_fd);
-            g_listen_fd = -1;
-        }
-    }
-
-    void handle_sigint(int) {
-        closeListener();
-    }
-}
-
 void setSocketOptions(Fd fd, Flags<Options> options) {
     if (options.hasFlag(Options::ReuseAddr)) {
         int one = 1;
         TRY(::setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof (one)));
+    }
+
+    if(options.hasFlag(Options::ReusePort)) {
+        int one = 1;
+        TRY(::setsockopt(fd, SOL_SOCKET, SO_REUSEPORT, &one, sizeof (one)));
     }
 
     if (options.hasFlag(Options::Linger)) {
@@ -84,6 +74,7 @@ Listener::Listener()
     , poller()
     , options_()
     , workers_(Const::DefaultWorkers)
+    , workersName_()
     , reactor_()
     , transportKey()
     , useSSL_(false)
@@ -97,6 +88,7 @@ Listener::Listener(const Address& address)
     , poller()
     , options_()
     , workers_(Const::DefaultWorkers)
+    , workersName_()
     , reactor_()
     , transportKey()
     , useSSL_(false)
@@ -120,7 +112,9 @@ Listener::~Listener() {
 void
 Listener::init(
     size_t workers,
-    Flags<Options> options, int backlog)
+    Flags<Options> options,
+    const std::string& workersName,
+    int backlog)
 {
     if (workers > hardware_concurrency()) {
         // Log::warning() << "More workers than available cores"
@@ -129,14 +123,8 @@ Listener::init(
     options_ = options;
     backlog_ = backlog;
     useSSL_ = false;
-
-    if (options_.hasFlag(Options::InstallSignalHandler)) {
-        if (signal(SIGINT, handle_sigint) == SIG_ERR) {
-            throw std::runtime_error("Could not install signal handler");
-        }
-    }
-
     workers_ = workers;
+    workersName_ = workersName;
 
 }
 
@@ -213,11 +201,10 @@ Listener::bind(const Address& address) {
     make_non_blocking(fd);
     poller.addFd(fd, Polling::NotifyOn::Read, Polling::Tag(fd));
     listen_fd = fd;
-    g_listen_fd = fd;
 
     auto transport = std::make_shared<Transport>(handler_);
 
-    reactor_.init(Aio::AsyncContext(workers_));
+    reactor_.init(Aio::AsyncContext(workers_, workersName_));
     transportKey = reactor_.addHandler(transport);
 }
 
@@ -261,7 +248,6 @@ Listener::run() {
         int ready_fds = poller.poll(events);
 
         if (ready_fds == -1) {
-            if (errno == EINTR && g_listen_fd == -1) return;
             throw Error::system("Polling");
         }
         for (const auto& event: events) {

@@ -290,22 +290,26 @@ namespace Private {
                 if (!cursor.advance(1)) return State::Again;
             }
 
-            if (name == "Cookie") {
+            if (Header::LowercaseEqualStatic(name, "cookie")) {
                 message->cookies_.removeAllCookies(); // removing existing cookies before re-adding them.
                 message->cookies_.addFromRaw(cursor.offset(start), cursor.diff(start));
             }
-            else if (name == "Set-Cookie") {
+            else if (Header::LowercaseEqualStatic(name, "set-cookie")) {
                 message->cookies_.add(Cookie::fromRaw(cursor.offset(start), cursor.diff(start)));
             }
+
+            // If the header is registered with the Registry, add its strongly
+            //  typed form to the headers list...
             else if (Header::Registry::instance().isRegistered(name)) {
                 std::shared_ptr<Header::Header> header = Header::Registry::instance().makeHeader(name);
                 header->parseRaw(cursor.offset(start), cursor.diff(start));
                 message->headers_.add(header);
             }
-            else {
-                std::string value(cursor.offset(start), cursor.diff(start));
-                message->headers_.addRaw(Header::Raw(std::move(name), std::move(value)));
-            }
+
+            // But also preserve a raw header version too, regardless of whether
+            //  its type was known to the Registry...
+            std::string value(cursor.offset(start), cursor.diff(start));
+            message->headers_.addRaw(Header::Raw(std::move(name), std::move(value)));
 
             // CRLF
             if (!cursor.advance(2)) return State::Again;
@@ -560,6 +564,11 @@ Request::cookies() const {
     return cookies_;
 }
 
+const Address&
+Request::address() const {
+    return address_;
+}
+
 #ifdef LIBSTDCPP_SMARTPTR_LOCK_FIXME
 std::shared_ptr<Tcp::Peer>
 Request::peer() const {
@@ -647,13 +656,6 @@ ResponseWriter::putOnWire(const char* data, size_t len)
         OUT(writeHeaders(headers_, buf_));
         OUT(writeCookies(cookies_, buf_));
 
-
-        auto connection = headers_.tryGet<Header::Connection>();
-        auto control = ConnectionControl::Close;
-
-        if (connection)
-            control = connection->control();
-
         /* @Todo @Major:
          * Correctly handle non-keep alive requests
          * Do not put Keep-Alive if version == Http::11 and request.keepAlive == true
@@ -685,12 +687,6 @@ ResponseWriter::putOnWire(const char* data, size_t len)
                          [=](int /*l*/) {
 
                              return Async::Promise<ssize_t>( [=](Async::Deferred<ssize_t> /*deferred*/) mutable {
-
-                                 if (control == ConnectionControl::KeepAlive) return ;
-
-                                 if (fd)
-                                     close(fd);
-
                                 return ;
                              } );
                          },
@@ -801,6 +797,8 @@ Handler::onInput(const char* buffer, size_t len, const std::shared_ptr<Tcp::Peer
 #endif
 
             auto request = parser.request;
+            request.copyAddress(peer->address());
+
             auto connection = request.headers().tryGet<Header::Connection>();
 
             if (connection) {

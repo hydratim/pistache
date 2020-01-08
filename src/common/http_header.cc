@@ -290,7 +290,7 @@ void
 ContentLength::parse(const std::string& data) {
     try {
         size_t pos;
-        uint64_t val = std::stoi(data, &pos);
+        uint64_t val = std::stoull(data, &pos);
         if (pos != 0) {
         }
 
@@ -301,6 +301,19 @@ ContentLength::parse(const std::string& data) {
 
 void
 ContentLength::write(std::ostream& os) const {
+    os << value_;
+}
+
+void
+Authorization::parse(const std::string& data) {
+    try {
+        value_ = data;
+    } catch (const std::invalid_argument& e) {
+    }
+}
+
+void
+Authorization::write(std::ostream& os) const {
     os << value_;
 }
 

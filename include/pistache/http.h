@@ -178,6 +178,12 @@ public:
     std::shared_ptr<Tcp::Peer> peer() const;
 #endif
 
+    const Address& address() const;
+
+    void copyAddress(const Address& address) {
+        address_ = address;
+    }
+
 private:
 #ifdef LIBSTDCPP_SMARTPTR_LOCK_FIXME
     void associatePeer(const std::shared_ptr<Tcp::Peer>& peer) {
@@ -188,6 +194,7 @@ private:
     }
 #endif
 
+
     Method method_;
     std::string resource_;
     Uri::Query query_;
@@ -195,6 +202,7 @@ private:
 #ifdef LIBSTDCPP_SMARTPTR_LOCK_FIXME
     std::weak_ptr<Tcp::Peer> peer_;
 #endif
+    Address address_;
 };
 
 class Handler;
@@ -215,6 +223,8 @@ public:
     {
         other.timerFd = -1;
     }
+
+    ~Timeout() { disarm(); }
 
     Timeout& operator=(Timeout&& other) {
         handler = other.handler;
@@ -497,6 +507,7 @@ public:
         code_ = code;
         return putOnWire(nullptr, 0);
     }
+
     Async::Promise<ssize_t> send(
             Code code,
             const std::string& body,
@@ -521,6 +532,16 @@ public:
             const char (&arr)[N],
             const Mime::MediaType& mime = Mime::MediaType())
     {
+        return send(
+            code, arr, N - 1, std::forward<const Mime::MediaType&>(mime));
+    }
+
+    Async::Promise<ssize_t> send(
+            Code code,
+            const char* data,
+            const size_t size,
+            const Mime::MediaType& mime = Mime::MediaType())
+    {
         /* @Refactor: code duplication */
         code_ = code;
 
@@ -532,7 +553,7 @@ public:
                 headers_.add(std::make_shared<Header::ContentType>(mime));
         }
 
-        return putOnWire(arr, N - 1);
+        return putOnWire(data, size);
     }
 
     ResponseStream stream(Code code, size_t streamSize = DefaultStreamSize) {

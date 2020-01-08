@@ -19,15 +19,22 @@ public:
         friend class Endpoint;
 
         Options& threads(int val);
+        Options& threadsName(const std::string& val);
         Options& flags(Flags<Tcp::Options> flags);
         Options& backlog(int val);
+        Options& maxRequestSize(size_t val);
+        Options& maxResponseSize(size_t val);
+
+        [[deprecated("Replaced by maxRequestSize(val)")]]
         Options& maxPayload(size_t val);
 
     private:
         int threads_;
+        std::string threadsName_;
         Flags<Tcp::Options> flags_;
         int backlog_;
-        size_t maxPayload_;
+        size_t maxRequestSize_;
+        size_t maxResponseSize_;
         Options();
     };
     Endpoint();

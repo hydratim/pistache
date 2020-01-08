@@ -288,16 +288,19 @@ namespace Async {
 
             void resolve(const std::shared_ptr<Core>& core) override {
                 if (resolveCount_ >= 1)
-                    throw Error("Resolve must not be called more than once");
+                  return; //TODO is this the right thing?
+                    //throw Error("Resolve must not be called more than once");
 
-                doResolve(coreCast(core));
                 ++resolveCount_;
+                doResolve(coreCast(core));
             }
 
             void reject(const std::shared_ptr<Core>& core) override {
                 if (rejectCount_ >= 1)
-                    throw Error("Reject must not be called more than once");
+                  return; //TODO is this the right thing?
+                    //throw Error("Reject must not be called more than once");
 
+                ++rejectCount_;
                 try {
                     doReject(coreCast(core));
                 } catch (const InternalRethrow& e) {
@@ -308,7 +311,6 @@ namespace Async {
                     }
                 }
 
-                ++rejectCount_;
             }
 
             std::shared_ptr<CoreT<T>> coreCast(const std::shared_ptr<Core>& core) const {
@@ -568,15 +570,18 @@ namespace Async {
                 template<typename P>
                 void finishResolve(P& promise) {
                     auto chainer = makeChainer(promise);
-                    promise.then(std::move(chainer), [=](std::exception_ptr exc) {
-                        auto core = this->chain_;
-                        core->exc = std::move(exc);
-                        core->state = State::Rejected;
+                    std::weak_ptr<Core> weakPtr = this->chain_;
+                    promise.then(std::move(chainer), [weakPtr](std::exception_ptr exc) {
+                        if (auto core = weakPtr.lock()) {
+                            core->exc = std::move(exc);
+                            core->state = State::Rejected;
 
-                        for (const auto& req: core->requests) {
-                            req->reject(core);
+                            for (const auto& req: core->requests) {
+                                req->reject(core);
+                            }
                         }
                     });
+
                 }
 
                 Resolve resolve_;

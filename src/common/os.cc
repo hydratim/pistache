@@ -193,8 +193,8 @@ namespace Polling {
 
         int ready_fds = -1;
         do {
-            ready_fds = epoll_wait(epoll_fd, evs, Const::MaxEvents, timeout.count());
-        } while (ready_fds < 0 && errno == EINTR);
+            ready_fds = ::epoll_wait(epoll_fd, evs, Const::MaxEvents, timeout.count());
+        } while(ready_fds < 0 && errno == EINTR);
 
         for (int i = 0; i < ready_fds; ++i) {
             const struct epoll_event *ev = evs + i;

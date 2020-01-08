@@ -16,10 +16,25 @@ Pistache was originally created by Mathieu Stefani, but he is no longer actively
 
 For those that prefer IRC over Slack, the rag-tag crew of maintainers idle in `#pistache` on Freenode. Please come and join us!
 
-# Precompiled packages
+# Precompiled Packages
 
-## Ubuntu PPA (Stable)
-If you would like to use [stable](https://launchpad.net/%7Ekip/+archive/ubuntu/pistache) packages, run the following:
+## Debian and Ubuntu
+We have submitted a [Request for Packaging](https://bugs.debian.org/cgi-bin/bugreport.cgi?bug=929593) downstream to Debian. Once Pistache has an official Debian package maintainer intimately familiar with the [Debian Policy Manual](https://www.debian.org/doc/debian-policy/), we can expect to eventually see Pistache available in Debian and all derivatives (e.g. Ubuntu and many others).
+
+But until then currently Pistache has partially compliant upstream Debianization. Our long term goal is to have our source package properly Debianized downstream by a Debian Policy Manual SME. In the mean time consider using our PPAs to avoid having to build from source.
+
+### Supported Architectures
+Currently Pistache is built and tested on a number of [architectures](https://wiki.debian.org/SupportedArchitectures). Some of these are suitable for desktop or server use and others for embedded environments. As of this writing we do not currently have any MIPS related packages that have been either built or tested.
+
+- amd64
+- arm64
+- armhf
+- i386
+- ppc64el
+- s390x
+
+### Ubuntu PPA (Stable)
+Currently there is no stable release of Pistache published to the [stable](https://launchpad.net/%7Ekip/+archive/ubuntu/pistache) PPA. However, when that time comes, run the following to install a stable package:
 
 ```console
 $ sudo add-apt-repository ppa:kip/pistache
@@ -27,7 +42,7 @@ $ sudo apt update
 $ sudo apt install libpistache-dev
 ```
 
-## Ubuntu PPA (Unstable)
+### Ubuntu PPA (Unstable)
 To use [unstable](https://launchpad.net/%7Ekip/+archive/ubuntu/pistache-unstable) packages, run the following:
 
 ```console
@@ -53,7 +68,7 @@ To use with the GNU Autotools, as an example, include the following snippet in y
     
 ```
 
-# To Build:
+# Building from source
 
 To download the latest available release, clone the repository over github.
 

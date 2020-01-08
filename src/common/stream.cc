@@ -34,8 +34,8 @@ RawBuffer::RawBuffer(const char* data, size_t length, bool isDetached)
     , length_(length)
     , isDetached_(isDetached)
 {
-    data_.resize(length_ + 1);
-    data_.assign(data, length_ + 1);
+    // input may come not from a ZTS - copy only length_ characters.
+    data_.assign(data, length_);
 }
 
 RawBuffer RawBuffer::detach(size_t fromIndex)
@@ -102,11 +102,13 @@ size_t FileBuffer::size() const
     return size_;
 }
 
+size_t DynamicStreamBuf::maxSize = Const::DefaultMaxResponseSize;
+
 DynamicStreamBuf::int_type
 DynamicStreamBuf::overflow(DynamicStreamBuf::int_type ch) {
     if (!traits_type::eq_int_type(ch, traits_type::eof())) {
         const auto size = data_.size();
-        if (size < maxSize_) {
+        if (size < maxSize) {
             reserve((size ? size : 1u) * 2);
             *pptr() = ch;
             pbump(1);
@@ -120,7 +122,7 @@ DynamicStreamBuf::overflow(DynamicStreamBuf::int_type ch) {
 void
 DynamicStreamBuf::reserve(size_t size)
 {
-    if (size > maxSize_) size = maxSize_;
+    if (size > maxSize) size = maxSize;
     const size_t oldSize = data_.size();
     data_.resize(size);
     this->setp(&data_[0] + oldSize, &data_[0] + size);
