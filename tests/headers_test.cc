@@ -1,7 +1,13 @@
-#include <pistache/http.h>
-#include <pistache/date.h>
+/*
+ * SPDX-FileCopyrightText: 2015 Mathieu Stefani
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
 
-#include "gtest/gtest.h"
+#include <date/date.h>
+#include <pistache/http.h>
+
+#include <gtest/gtest.h>
 
 #include <algorithm>
 #include <chrono>
@@ -13,30 +19,30 @@ TEST(headers_test, accept)
     a1.parse("audio/*; q=0.2");
 
     {
-        const auto &media = a1.media();
+        const auto& media = a1.media();
         ASSERT_TRUE(media.size() == 1U);
 
-        const auto &mime = media[0];
+        const auto& mime = media[0];
         ASSERT_TRUE(mime == MIME(Audio, Star));
-        ASSERT_TRUE(mime.q().getOrElse(Pistache::Http::Mime::Q(0)) == Pistache::Http::Mime::Q(20));
+        ASSERT_TRUE(mime.q().value_or(Pistache::Http::Mime::Q(0)) == Pistache::Http::Mime::Q(20));
     }
 
     Pistache::Http::Header::Accept a2;
     a2.parse("text/*, text/html, text/html;level=1, */*");
 
     {
-        const auto &media = a2.media();
+        const auto& media = a2.media();
         ASSERT_TRUE(media.size() == 4U);
 
-        const auto &m1 = media[0];
+        const auto& m1 = media[0];
         ASSERT_TRUE(m1 == MIME(Text, Star));
-        const auto &m2 = media[1];
+        const auto& m2 = media[1];
         ASSERT_TRUE(m2 == MIME(Text, Html));
-        const auto &m3 = media[2];
+        const auto& m3 = media[2];
         ASSERT_TRUE(m3 == MIME(Text, Html));
         auto level = m3.getParam("level");
-        ASSERT_TRUE(level.getOrElse("") == "1");
-        const auto &m4 = media[3];
+        ASSERT_TRUE(level.value_or("") == "1");
+        const auto& m4 = media[3];
         ASSERT_TRUE(m4 == MIME(Star, Star));
     }
 
@@ -45,24 +51,28 @@ TEST(headers_test, accept)
              "text/html;level=2;q=0.4, */*;q=0.5");
 
     {
-        const auto &media = a3.media();
+        const auto& media = a3.media();
         ASSERT_TRUE(media.size() == 5U);
 
         ASSERT_TRUE(media[0] == MIME(Text, Star));
-        ASSERT_TRUE(media[0].q().getOrElse(Pistache::Http::Mime::Q(0)) == Pistache::Http::Mime::Q(30));
+        ASSERT_TRUE(media[0].q().value_or(Pistache::Http::Mime::Q(0)) == Pistache::Http::Mime::Q(30));
 
         ASSERT_TRUE(media[1] == MIME(Text, Html));
         ASSERT_TRUE(media[2] == MIME(Text, Html));
         ASSERT_TRUE(media[3] == MIME(Text, Html));
         ASSERT_TRUE(media[4] == MIME(Star, Star));
-        ASSERT_TRUE(media[4].q().getOrElse(Pistache::Http::Mime::Q(0)) == Pistache::Http::Mime::Q::fromFloat(0.5));
+        ASSERT_TRUE(media[4].q().value_or(Pistache::Http::Mime::Q(0)) == Pistache::Http::Mime::Q::fromFloat(0.5));
     }
 
     Pistache::Http::Header::Accept a4;
     ASSERT_THROW(a4.parse("text/*;q=0.4, text/html;q=0.3,"), std::runtime_error);
+    /* Shameless dummy comment to work around syntax highlighting bug in nano...
+   */
 
     Pistache::Http::Header::Accept a5;
     ASSERT_THROW(a5.parse("text/*;q=0.4, text/html;q=0.3, "), std::runtime_error);
+    /* Shameless dummy comment to work around syntax highlighting bug in nano...
+   */
 }
 
 TEST(headers_test, allow)
@@ -74,7 +84,8 @@ TEST(headers_test, allow)
     ASSERT_TRUE(os.str() == "GET");
     os.str("");
 
-    Pistache::Http::Header::Allow a2({Pistache::Http::Method::Post, Pistache::Http::Method::Put});
+    Pistache::Http::Header::Allow a2(
+        { Pistache::Http::Method::Post, Pistache::Http::Method::Put });
     a2.write(os);
     ASSERT_TRUE(os.str() == "POST, PUT");
     os.str("");
@@ -90,7 +101,7 @@ TEST(headers_test, allow)
     os.str("");
 
     Pistache::Http::Header::Allow a4(Pistache::Http::Method::Head);
-    a4.addMethods({Pistache::Http::Method::Get, Pistache::Http::Method::Options});
+    a4.addMethods({ Pistache::Http::Method::Get, Pistache::Http::Method::Options });
     a4.write(os);
     ASSERT_TRUE(os.str() == "HEAD, GET, OPTIONS");
     os.str("");
@@ -105,7 +116,8 @@ TEST(headers_test, allow)
 
 TEST(headers_test, cache_control)
 {
-    auto testTrivial = [](std::string str, Pistache::Http::CacheDirective::Directive expected) {
+    auto testTrivial = [](std::string str,
+                          Pistache::Http::CacheDirective::Directive expected) {
         Pistache::Http::Header::CacheControl cc;
         cc.parse(str);
 
@@ -114,7 +126,9 @@ TEST(headers_test, cache_control)
         ASSERT_TRUE(directives[0].directive() == expected);
     };
 
-    auto testTimed = [](std::string str, Pistache::Http::CacheDirective::Directive expected, uint64_t delta) {
+    auto testTimed = [](std::string str,
+                        Pistache::Http::CacheDirective::Directive expected,
+                        uint64_t delta) {
         Pistache::Http::Header::CacheControl cc;
         cc.parse(str);
 
@@ -153,7 +167,8 @@ TEST(headers_test, cache_control)
     ASSERT_TRUE(d2[1].delta() == std::chrono::seconds(200));
     ASSERT_TRUE(d2[2].directive() == Pistache::Http::CacheDirective::ProxyRevalidate);
 
-    Pistache::Http::Header::CacheControl cc3(Pistache::Http::CacheDirective::NoCache);
+    Pistache::Http::Header::CacheControl cc3(
+        Pistache::Http::CacheDirective::NoCache);
     std::ostringstream oss;
     cc3.write(oss);
     ASSERT_TRUE(oss.str() == "no-cache");
@@ -164,63 +179,76 @@ TEST(headers_test, cache_control)
     ASSERT_TRUE(oss.str() == "no-cache, no-store");
     oss.str("");
 
-    Pistache::Http::Header::CacheControl cc4(Pistache::Http::CacheDirective::NoTransform);
+    Pistache::Http::Header::CacheControl cc4(
+        Pistache::Http::CacheDirective::NoTransform);
     cc4.write(oss);
     ASSERT_TRUE(oss.str() == "no-transform");
     oss.str("");
 
-    Pistache::Http::Header::CacheControl cc5(Pistache::Http::CacheDirective::OnlyIfCached);
+    Pistache::Http::Header::CacheControl cc5(
+        Pistache::Http::CacheDirective::OnlyIfCached);
     cc5.write(oss);
     ASSERT_TRUE(oss.str() == "only-if-cached");
     oss.str("");
 
-    Pistache::Http::Header::CacheControl cc6(Pistache::Http::CacheDirective::Private);
+    Pistache::Http::Header::CacheControl cc6(
+        Pistache::Http::CacheDirective::Private);
     cc6.write(oss);
     ASSERT_TRUE(oss.str() == "private");
     oss.str("");
 
-    Pistache::Http::Header::CacheControl cc7(Pistache::Http::CacheDirective::Public);
+    Pistache::Http::Header::CacheControl cc7(
+        Pistache::Http::CacheDirective::Public);
     cc7.write(oss);
     ASSERT_TRUE(oss.str() == "public");
     oss.str("");
 
-    Pistache::Http::Header::CacheControl cc8(Pistache::Http::CacheDirective::MustRevalidate);
+    Pistache::Http::Header::CacheControl cc8(
+        Pistache::Http::CacheDirective::MustRevalidate);
     cc8.write(oss);
     ASSERT_TRUE(oss.str() == "must-revalidate");
     oss.str("");
 
-    Pistache::Http::Header::CacheControl cc9(Pistache::Http::CacheDirective::ProxyRevalidate);
+    Pistache::Http::Header::CacheControl cc9(
+        Pistache::Http::CacheDirective::ProxyRevalidate);
     cc9.write(oss);
     ASSERT_TRUE(oss.str() == "proxy-revalidate");
     oss.str("");
 
-    Pistache::Http::Header::CacheControl cc10(Pistache::Http::CacheDirective(Pistache::Http::CacheDirective::MaxStale, std::chrono::seconds(12345)));
+    Pistache::Http::Header::CacheControl cc10(Pistache::Http::CacheDirective(
+        Pistache::Http::CacheDirective::MaxStale, std::chrono::seconds(12345)));
     cc10.write(oss);
     ASSERT_TRUE(oss.str() == "max-stale=12345");
     oss.str("");
 
-    Pistache::Http::Header::CacheControl cc11(Pistache::Http::CacheDirective(Pistache::Http::CacheDirective::MinFresh, std::chrono::seconds(12345)));
+    Pistache::Http::Header::CacheControl cc11(Pistache::Http::CacheDirective(
+        Pistache::Http::CacheDirective::MinFresh, std::chrono::seconds(12345)));
     cc11.write(oss);
     ASSERT_TRUE(oss.str() == "min-fresh=12345");
     oss.str("");
 
-    Pistache::Http::Header::CacheControl cc14(Pistache::Http::CacheDirective(Pistache::Http::CacheDirective::SMaxAge, std::chrono::seconds(12345)));
+    Pistache::Http::Header::CacheControl cc14(Pistache::Http::CacheDirective(
+        Pistache::Http::CacheDirective::SMaxAge, std::chrono::seconds(12345)));
     cc14.write(oss);
     ASSERT_TRUE(oss.str() == "s-maxage=12345");
     oss.str("");
 
-    Pistache::Http::Header::CacheControl cc15(Pistache::Http::CacheDirective::Ext);
+    Pistache::Http::Header::CacheControl cc15(
+        Pistache::Http::CacheDirective::Ext);
     cc15.write(oss);
-    ASSERT_TRUE(oss.str() == "");
+    ASSERT_TRUE(oss.str().empty());
     oss.str("");
 
     Pistache::Http::Header::CacheControl cc16;
     cc16.write(oss);
-    ASSERT_TRUE(oss.str() == "");
+    ASSERT_TRUE(oss.str().empty());
     oss.str("");
 
     Pistache::Http::Header::CacheControl cc12;
-    cc12.addDirectives({Pistache::Http::CacheDirective::Public, Pistache::Http::CacheDirective(Pistache::Http::CacheDirective::MaxAge, std::chrono::seconds(600))});
+    cc12.addDirectives(
+        { Pistache::Http::CacheDirective(Pistache::Http::CacheDirective::Public),
+          Pistache::Http::CacheDirective(Pistache::Http::CacheDirective::MaxAge,
+                                         std::chrono::seconds(600)) });
     cc12.write(oss);
     ASSERT_TRUE(oss.str() == "public, max-age=600");
     oss.str("");
@@ -228,8 +256,9 @@ TEST(headers_test, cache_control)
     Pistache::Http::Header::CacheControl cc13;
     std::vector<Pistache::Http::CacheDirective> cd;
 
-    cd.push_back(Pistache::Http::CacheDirective::Public);
-    cd.push_back(Pistache::Http::CacheDirective(Pistache::Http::CacheDirective::MaxAge, std::chrono::seconds(600)));
+    cd.emplace_back(Pistache::Http::CacheDirective::Public);
+    cd.emplace_back(
+        Pistache::Http::CacheDirective::MaxAge, std::chrono::seconds(600));
 
     cc13.addDirectives(cd);
     cc13.write(oss);
@@ -247,15 +276,72 @@ TEST(headers_test, content_length)
     ASSERT_TRUE(cl.value() == 3495U);
 }
 
-TEST(headers_test, authorization_test)
+// Verify authorization header with basic method works correctly...
+TEST(headers_test, authorization_basic_test)
 {
     Pistache::Http::Header::Authorization au;
     std::ostringstream oss;
-    au.parse("Bearer eyJhbGciOiJIUzUxMiIsInR5cCI6IkpXUyJ9.eyJleHAiOjE1NzA2MzA0MDcsImlhdCI6MTU3MDU0NDAwNywibmFtZSI6IkFkbWluIE5hbWUiLCJzYW1wbGUiOiJUZXN0In0.zLTAAnBftlqccsU-4mL69P4tQl3VhcglMg-d0131JxqX4xSZLlO5xMRrCPBgn_00OxKJ9CQdnpjpuzblNQd2-A");
+
+    // Sample basic method authorization header for credentials
+    //  Aladdin:OpenSesame base 64 encoded...
+    const std::string BasicEncodedValue = "Basic QWxhZGRpbjpPcGVuU2VzYW1l";
+
+    // Try parsing the raw basic authorization value...
+    au.parse(BasicEncodedValue);
+
+    // Verify what went in is what came out...
+    au.write(oss);
+    ASSERT_TRUE(BasicEncodedValue == oss.str());
+    oss = std::ostringstream();
+
+    // Verify authorization header recognizes it is basic method and no other...
+    ASSERT_TRUE(
+        au.hasMethod<Pistache::Http::Header::Authorization::Method::Basic>());
+    ASSERT_FALSE(
+        au.hasMethod<Pistache::Http::Header::Authorization::Method::Bearer>());
+
+    // Set credentials from decoded user and password...
+    au.setBasicUserPassword("Aladdin", "OpenSesame");
+
+    // Verify it encoded correctly...
+    au.write(oss);
+    ASSERT_TRUE(BasicEncodedValue == oss.str());
+    oss = std::ostringstream();
+
+    // Verify it decoded correctly...
+    ASSERT_TRUE(au.getBasicUser() == "Aladdin");
+    ASSERT_TRUE(au.getBasicPassword() == "OpenSesame");
+}
+
+TEST(headers_test, authorization_bearer_test)
+{
+    Pistache::Http::Header::Authorization au;
+    std::ostringstream oss;
+    au.parse("Bearer "
+             "eyJhbGciOiJIUzUxMiIsInR5cCI6IkpXUyJ9."
+             "eyJleHAiOjE1NzA2MzA0MDcsImlhdCI6MTU3MDU0NDAwNywibmFtZSI6IkFkbWluIE5"
+             "hbWUiLCJzYW1wbGUiOiJUZXN0In0.zLTAAnBftlqccsU-4mL69P4tQl3VhcglMg-"
+             "d0131JxqX4xSZLlO5xMRrCPBgn_00OxKJ9CQdnpjpuzblNQd2-A");
     au.write(oss);
 
-    ASSERT_TRUE("Bearer eyJhbGciOiJIUzUxMiIsInR5cCI6IkpXUyJ9.eyJleHAiOjE1NzA2MzA0MDcsImlhdCI6MTU3MDU0NDAwNywibmFtZSI6IkFkbWluIE5hbWUiLCJzYW1wbGUiOiJUZXN0In0.zLTAAnBftlqccsU-4mL69P4tQl3VhcglMg-d0131JxqX4xSZLlO5xMRrCPBgn_00OxKJ9CQdnpjpuzblNQd2-A" == oss.str());
-    ASSERT_TRUE(au.value() == "Bearer eyJhbGciOiJIUzUxMiIsInR5cCI6IkpXUyJ9.eyJleHAiOjE1NzA2MzA0MDcsImlhdCI6MTU3MDU0NDAwNywibmFtZSI6IkFkbWluIE5hbWUiLCJzYW1wbGUiOiJUZXN0In0.zLTAAnBftlqccsU-4mL69P4tQl3VhcglMg-d0131JxqX4xSZLlO5xMRrCPBgn_00OxKJ9CQdnpjpuzblNQd2-A");
+    ASSERT_TRUE(
+        au.hasMethod<Pistache::Http::Header::Authorization::Method::Bearer>());
+    ASSERT_FALSE(
+        au.hasMethod<Pistache::Http::Header::Authorization::Method::Basic>());
+
+    ASSERT_TRUE(
+        "Bearer "
+        "eyJhbGciOiJIUzUxMiIsInR5cCI6IkpXUyJ9."
+        "eyJleHAiOjE1NzA2MzA0MDcsImlhdCI6MTU3MDU0NDAwNywibmFtZSI6IkFkbWluIE5hbWUi"
+        "LCJzYW1wbGUiOiJUZXN0In0.zLTAAnBftlqccsU-4mL69P4tQl3VhcglMg-"
+        "d0131JxqX4xSZLlO5xMRrCPBgn_00OxKJ9CQdnpjpuzblNQd2-A"
+        == oss.str());
+    ASSERT_TRUE(
+        au.value() == "Bearer "
+                      "eyJhbGciOiJIUzUxMiIsInR5cCI6IkpXUyJ9."
+                      "eyJleHAiOjE1NzA2MzA0MDcsImlhdCI6MTU3MDU0NDAwNywibmFtZSI6IkFkbWluIE5hbWUi"
+                      "LCJzYW1wbGUiOiJUZXN0In0.zLTAAnBftlqccsU-4mL69P4tQl3VhcglMg-"
+                      "d0131JxqX4xSZLlO5xMRrCPBgn_00OxKJ9CQdnpjpuzblNQd2-A");
 }
 
 TEST(headers_test, expect_test)
@@ -272,7 +358,7 @@ TEST(headers_test, expect_test)
     e.parse("unknown");
     e.write(oss);
 
-    ASSERT_TRUE("" == oss.str());
+    ASSERT_TRUE(oss.str().empty());
     ASSERT_TRUE(e.expectation() == Pistache::Http::Expectation::Ext);
     oss.str("");
 }
@@ -283,25 +369,29 @@ TEST(headers_test, connection)
 
     struct Test
     {
-        const char *data;
+        const char* data;
         Pistache::Http::ConnectionControl expected;
-        const char *expected_string;
+        const char* expected_string;
     } tests[] = {
 
-        {"close", Pistache::Http::ConnectionControl::Close, "Close"},
-        {"clOse", Pistache::Http::ConnectionControl::Close, "Close"},
-        {"Close", Pistache::Http::ConnectionControl::Close, "Close"},
-        {"CLOSE", Pistache::Http::ConnectionControl::Close, "Close"},
+        { "close", Pistache::Http::ConnectionControl::Close, "Close" },
+        { "clOse", Pistache::Http::ConnectionControl::Close, "Close" },
+        { "Close", Pistache::Http::ConnectionControl::Close, "Close" },
+        { "CLOSE", Pistache::Http::ConnectionControl::Close, "Close" },
 
-        {"keep-alive", Pistache::Http::ConnectionControl::KeepAlive, "Keep-Alive"},
-        {"Keep-Alive", Pistache::Http::ConnectionControl::KeepAlive, "Keep-Alive"},
-        {"kEEp-alIvE", Pistache::Http::ConnectionControl::KeepAlive, "Keep-Alive"},
-        {"KEEP-ALIVE", Pistache::Http::ConnectionControl::KeepAlive, "Keep-Alive"},
+        { "keep-alive", Pistache::Http::ConnectionControl::KeepAlive,
+          "Keep-Alive" },
+        { "Keep-Alive", Pistache::Http::ConnectionControl::KeepAlive,
+          "Keep-Alive" },
+        { "kEEp-alIvE", Pistache::Http::ConnectionControl::KeepAlive,
+          "Keep-Alive" },
+        { "KEEP-ALIVE", Pistache::Http::ConnectionControl::KeepAlive,
+          "Keep-Alive" },
 
-        {"Ext", Pistache::Http::ConnectionControl::Ext, "Ext"},
-        {"ext", Pistache::Http::ConnectionControl::Ext, "Ext"},
-        {"eXt", Pistache::Http::ConnectionControl::Ext, "Ext"},
-        {"eXT", Pistache::Http::ConnectionControl::Ext, "Ext"}
+        { "Ext", Pistache::Http::ConnectionControl::Ext, "Ext" },
+        { "ext", Pistache::Http::ConnectionControl::Ext, "Ext" },
+        { "eXt", Pistache::Http::ConnectionControl::Ext, "Ext" },
+        { "eXT", Pistache::Http::ConnectionControl::Ext, "Ext" }
 
     };
 
@@ -321,7 +411,7 @@ TEST(headers_test, date_test_rfc_1123)
 {
 
     using namespace std::chrono;
-    Pistache::Http::FullDate::time_point expected_time_point = date::sys_days(date::year{1994} / 11 / 6) + hours(8) + minutes(49) + seconds(37);
+    Pistache::Http::FullDate::time_point expected_time_point = date::sys_days(date::year { 1994 } / 11 / 6) + hours(8) + minutes(49) + seconds(37);
 
     /* RFC-1123 */
     Pistache::Http::Header::Date d1;
@@ -334,7 +424,7 @@ TEST(headers_test, date_test_rfc_850)
 {
 
     using namespace std::chrono;
-    Pistache::Http::FullDate::time_point expected_time_point = date::sys_days(date::year{1994} / 11 / 6) + hours(8) + minutes(49) + seconds(37);
+    Pistache::Http::FullDate::time_point expected_time_point = date::sys_days(date::year { 1994 } / 11 / 6) + hours(8) + minutes(49) + seconds(37);
 
     /* RFC-850 */
     Pistache::Http::Header::Date d2;
@@ -347,7 +437,7 @@ TEST(headers_test, date_test_asctime)
 {
 
     using namespace std::chrono;
-    Pistache::Http::FullDate::time_point expected_time_point = date::sys_days(date::year{1994} / 11 / 6) + hours(8) + minutes(49) + seconds(37);
+    Pistache::Http::FullDate::time_point expected_time_point = date::sys_days(date::year { 1994 } / 11 / 6) + hours(8) + minutes(49) + seconds(37);
 
     /* ANSI C's asctime format */
     Pistache::Http::Header::Date d3;
@@ -395,9 +485,11 @@ TEST(headers_test, host)
     ASSERT_TRUE(oss.str() == "localhost:8080");
     oss.str("");
 
-    /* Due to an error in GLIBC these tests don't fail as expected, further research needed */
-    //     ASSERT_THROW( host.parse("256.256.256.256:8080");, std::invalid_argument);
-    //     ASSERT_THROW( host.parse("1.0.0.256:8080");, std::invalid_argument);
+    /* Due to an error in GLIBC these tests don't fail as expected, further
+   * research needed */
+    //     ASSERT_THROW( host.parse("256.256.256.256:8080");,
+    //     std::invalid_argument); ASSERT_THROW( host.parse("1.0.0.256:8080");,
+    //     std::invalid_argument);
 
     host.parse("[::1]:8080");
     host.write(oss);
@@ -415,9 +507,12 @@ TEST(headers_test, host)
     ASSERT_TRUE(oss.str() == "[2001:0DB8:AABB:CCDD:EEFF:0011:2233:4455]:8080");
     oss.str("");
 
-    /* Due to an error in GLIBC these tests don't fail as expected, further research needed */
-    //     ASSERT_THROW( host.parse("[GGGG:GGGG:GGGG:GGGG:GGGG:GGGG:GGGG:GGGG]:8080");, std::invalid_argument);
-    //     ASSERT_THROW( host.parse("[::GGGG]:8080");, std::invalid_argument);
+    /* Due to an error in GLIBC these tests don't fail as expected, further
+   * research needed */
+    //     ASSERT_THROW(
+    //     host.parse("[GGGG:GGGG:GGGG:GGGG:GGGG:GGGG:GGGG:GGGG]:8080");,
+    //     std::invalid_argument); ASSERT_THROW( host.parse("[::GGGG]:8080");,
+    //     std::invalid_argument);
 }
 
 TEST(headers_test, user_agent)
@@ -428,7 +523,8 @@ TEST(headers_test, user_agent)
     ua.parse("CERN-LineMode/2.15 libwww/2.17b3");
     ua.write(os);
 
-    ASSERT_TRUE(std::strcmp(os.str().c_str(), "CERN-LineMode/2.15 libwww/2.17b3") == 0);
+    ASSERT_TRUE(
+        std::strcmp(os.str().c_str(), "CERN-LineMode/2.15 libwww/2.17b3") == 0);
     ASSERT_TRUE(ua.agent() == "CERN-LineMode/2.15 libwww/2.17b3");
 }
 
@@ -481,9 +577,9 @@ TEST(headers_test, content_type)
     ct.write(oss);
 
     ASSERT_TRUE("text/html; charset=ISO-8859-4" == oss.str());
-    const auto &mime = ct.mime();
+    const auto& mime = ct.mime();
     ASSERT_TRUE(mime == MIME(Text, Html));
-    ASSERT_TRUE(mime.getParam("charset").getOrElse("") == "ISO-8859-4");
+    ASSERT_TRUE(mime.getParam("charset").value_or("") == "ISO-8859-4");
 }
 
 TEST(headers_test, access_control_allow_origin_test)
@@ -503,11 +599,16 @@ TEST(headers_test, access_control_allow_headers_test)
     Pistache::Http::Header::AccessControlAllowHeaders allowHeaders;
     std::ostringstream os;
 
-    allowHeaders.parse("Content-Type, Access-Control-Allow-Headers, Authorization, X-Requested-With");
+    allowHeaders.parse("Content-Type, Access-Control-Allow-Headers, "
+                       "Authorization, X-Requested-With");
     allowHeaders.write(os);
 
-    ASSERT_TRUE(std::strcmp(os.str().c_str(), "Content-Type, Access-Control-Allow-Headers, Authorization, X-Requested-With") == 0);
-    ASSERT_TRUE(allowHeaders.val() == "Content-Type, Access-Control-Allow-Headers, Authorization, X-Requested-With");
+    ASSERT_TRUE(std::strcmp(os.str().c_str(),
+                            "Content-Type, Access-Control-Allow-Headers, "
+                            "Authorization, X-Requested-With")
+                == 0);
+    ASSERT_TRUE(allowHeaders.val() == "Content-Type, Access-Control-Allow-Headers, Authorization, "
+                                      "X-Requested-With");
 }
 
 TEST(headers_test, access_control_expose_headers_test)
@@ -559,7 +660,7 @@ TEST(headers_test, server_test)
     ASSERT_TRUE("server" == oss.str());
     oss.str("");
 
-    std::vector<std::string> tokens({"server0", "server1"});
+    std::vector<std::string> tokens({ "server0", "server1" });
     Pistache::Http::Header::Server s1(tokens);
     s1.write(oss);
     ASSERT_TRUE("server0 server1" == oss.str());
@@ -598,12 +699,16 @@ TEST(headers_test, add_new_header_test)
 {
     const std::string headerName = "TestHeader";
 
-    ASSERT_FALSE(Pistache::Http::Header::Registry::instance().isRegistered(headerName));
+    ASSERT_FALSE(
+        Pistache::Http::Header::Registry::instance().isRegistered(headerName));
     Pistache::Http::Header::Registry::instance().registerHeader<TestHeader>();
-    ASSERT_TRUE(Pistache::Http::Header::Registry::instance().isRegistered(headerName));
+    ASSERT_TRUE(
+        Pistache::Http::Header::Registry::instance().isRegistered(headerName));
 
-    const auto &headersList = Pistache::Http::Header::Registry::instance().headersList();
-    const bool isFound = std::find(headersList.begin(), headersList.end(), headerName) != headersList.end();
+    const auto& headersList = Pistache::Http::Header::Registry::instance().headersList();
+    const bool isFound      = std::find(headersList.begin(), headersList.end(),
+                                   headerName)
+        != headersList.end();
     ASSERT_TRUE(isFound);
 }
 
@@ -617,7 +722,7 @@ TEST(headers_test, header_already_registered)
     {
         RegisterHeader(Accept);
     }
-    catch (std::exception &e)
+    catch (std::exception& e)
     {
         what = e.what();
     }
@@ -632,9 +737,10 @@ TEST(headers_test, unknown_header)
 
     try
     {
-        auto h = Pistache::Http::Header::Registry::instance().makeHeader("UnknownHeader");
+        auto h = Pistache::Http::Header::Registry::instance().makeHeader(
+            "UnknownHeader");
     }
-    catch (std::exception &e)
+    catch (std::exception& e)
     {
         what = e.what();
     }
@@ -649,9 +755,10 @@ TEST(headers_test, could_not_find_header)
 
     try
     {
-        auto h = Pistache::Http::Header::Registry::instance().makeHeader("UnknownHeader");
+        auto h = Pistache::Http::Header::Registry::instance().makeHeader(
+            "UnknownHeader");
     }
-    catch (std::exception &e)
+    catch (std::exception& e)
     {
         what = e.what();
     }
@@ -665,11 +772,13 @@ TEST(headers_test, registered_header_in_raw_list)
 {
     // Make sure TestHeader is registered because Googletest does not guarantee
     //  add_new_header_test will be run before this test...
-    if(!Pistache::Http::Header::Registry::instance().isRegistered(TestHeader::Name))
+    if (!Pistache::Http::Header::Registry::instance().isRegistered(
+            TestHeader::Name))
         Pistache::Http::Header::Registry::instance().registerHeader<TestHeader>();
 
     // Verify test header is registered...
-    ASSERT_TRUE(Pistache::Http::Header::Registry::instance().isRegistered(TestHeader::Name));
+    ASSERT_TRUE(Pistache::Http::Header::Registry::instance().isRegistered(
+        TestHeader::Name));
 
     // Prepare a client request header string that should use our registered
     //  TestHeader...
@@ -685,13 +794,13 @@ TEST(headers_test, registered_header_in_raw_list)
     step.apply(cursor);
 
     // Retrieve all of the headers the client submitted in their request...
-    const auto &headersCollection = request.headers();
+    const auto& headersCollection = request.headers();
 
     // Verify our TestHeader is in the strongly typed list...
     ASSERT_TRUE(headersCollection.has<TestHeader>());
 
     // Obtain the raw header list...
-    const auto &rawHeadersList = headersCollection.rawList();
+    const auto& rawHeadersList = headersCollection.rawList();
 
     // Verify the TestHeader is in the raw list as expected...
     const auto foundRawHeader = rawHeadersList.find(TestHeader::Name);
@@ -704,13 +813,12 @@ TEST(headers_test, raw_headers_are_case_insensitive)
 {
     // no matter the casing of the input header,
     std::vector<std::string> test_cases = {
-        "Custom-Header: x\r\n",
-        "CUSTOM-HEADER: x\r\n",
-        "custom-header: x\r\n",
+        "Custom-Header: x\r\n", "CUSTOM-HEADER: x\r\n", "custom-header: x\r\n",
         "CuStOm-HeAdEr: x\r\n"
     };
 
-    for(auto&& test : test_cases) {
+    for (auto&& test : test_cases)
+    {
         Pistache::RawStreamBuf<> buf(&test[0], test.size());
         Pistache::StreamCursor cursor(&buf);
         Pistache::Http::Request request;
@@ -718,13 +826,12 @@ TEST(headers_test, raw_headers_are_case_insensitive)
         step.apply(cursor);
 
         // or the header you try and get, it should work:
-        ASSERT_FALSE(request.headers().tryGetRaw("Custom-Header").isEmpty());
-        ASSERT_FALSE(request.headers().tryGetRaw("CUSTOM-HEADER").isEmpty());
-        ASSERT_FALSE(request.headers().tryGetRaw("custom-header").isEmpty());
-        ASSERT_FALSE(request.headers().tryGetRaw("CuStOm-HeAdEr").isEmpty());
+        ASSERT_TRUE(request.headers().tryGetRaw("Custom-Header").has_value());
+        ASSERT_TRUE(request.headers().tryGetRaw("CUSTOM-HEADER").has_value());
+        ASSERT_TRUE(request.headers().tryGetRaw("custom-header").has_value());
+        ASSERT_TRUE(request.headers().tryGetRaw("CuStOm-HeAdEr").has_value());
     }
 }
-
 
 TEST(headers_test, cookie_headers_are_case_insensitive)
 {
@@ -740,7 +847,8 @@ TEST(headers_test, cookie_headers_are_case_insensitive)
         "SeT-CoOkIe: x=y\r\n",
     };
 
-    for(auto&& test : test_cases) {
+    for (auto&& test : test_cases)
+    {
         Pistache::RawStreamBuf<> buf(&test[0], test.size());
         Pistache::StreamCursor cursor(&buf);
         Pistache::Http::Request request;

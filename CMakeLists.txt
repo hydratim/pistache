@@ -1,88 +1,48 @@
-cmake_minimum_required (VERSION 3.1.3)
-project (pistache)
+# SPDX-FileCopyrightText: 2015 Mathieu Stefani
+#
+# SPDX-License-Identifier: Apache-2.0
 
-include(GNUInstallDirs)
+cmake_minimum_required (VERSION 3.11)
 
-set(CMAKE_CXX_FLAGS  "${CMAKE_CXX_FLAGS} -Wall -pedantic -Wextra -Wno-missing-field-initializers")
-set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} ${PROJECT_SOURCE_DIR}/CMakeModules)
+set(CMAKE_BUILD_TYPE_INIT Release)
 
-if(NOT CMAKE_BUILD_TYPE)
-    set(CMAKE_BUILD_TYPE Release)
-endif()
-
-if(CMAKE_BUILD_TYPE MATCHES "Debug")
-    set(CMAKE_CXX_FLAGS  "${CMAKE_CXX_FLAGS} -g -O0 -fprofile-arcs -ftest-coverage")
-endif()
-
-option(PISTACHE_BUILD_TESTS "build tests alongside the project" OFF)
-option(PISTACHE_ENABLE_NETWORK_TESTS "if tests are built, run ones needing network access" ON)
-option(PISTACHE_BUILD_EXAMPLES "build examples alongside the project" OFF)
-option(PISTACHE_BUILD_DOCS "build docs alongside the project" OFF)
-option(PISTACHE_INSTALL "add pistache as install target (recommended)" ON)
-option(PISTACHE_USE_SSL "add support for SSL server" OFF)
-
-if (PISTACHE_BUILD_TESTS)
-    find_program(CTEST_MEMORYCHECK_COMMAND NAMES valgrind)
-    find_program(CTEST_COVERAGE_COMMAND NAMES gcov)
-    find_program(CMAKE_CXX_CPPCHECK NAMES cppcheck)
-
-    if (CMAKE_CXX_CPPCHECK)
-        message("-- Cppcheck found " ${CMAKE_CXX_CPPCHECK})
-        list(
-            APPEND CMAKE_CXX_CPPCHECK 
-                "--enable=all"
-                "--suppress=*:${PROJECT_SOURCE_DIR}/third-party*"
-                "--suppress=*:${PROJECT_SOURCE_DIR}/tests*"
-        )
-    else()
-        message("-- Cppcheck not found")
-        set(CMAKE_CXX_CPPCHECK "")
-    endif()
-
-    INCLUDE(Dart)
-
-    add_custom_target(test_memcheck COMMAND ${CMAKE_CTEST_COMMAND}  --force-new-ctest-process --test-action memcheck)
-    add_custom_target(coverage COMMAND ${CMAKE_CTEST_COMMAND}  --force-new-ctest-process --test-action coverage)
-endif()
-
-# CMAKE version less than 3.8 does not understand the CMAKE_CXX_FLAGS
-# set to 17, so a manual check if performed on older version
-if(${CMAKE_VERSION} VERSION_LESS "3.8.0")
-    include(CheckCXXCompilerFlag)
-    CHECK_CXX_COMPILER_FLAG("-std=c++17" COMPILER_SUPPORTS_CXX17)
-    if(COMPILER_SUPPORTS_CXX17)
-        set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++17")
-    else()
-        set(CMAKE_CXX_STANDARD 14)
-    endif()
-else()
-    # Clang exports C++17 in std::experimental namespace (tested on Clang 5 and 6).
-    # This gives an error on date.h external library.
-    # Following workaround forces Clang to compile at best with C++14
-    if(CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
-        set(CMAKE_CXX_STANDARD 14)
-    elseif (CMAKE_COMPILER_IS_GNUCC)
-        if(CMAKE_CXX_COMPILER_VERSION VERSION_GREATER 7.0)
-            set(CMAKE_CXX_STANDARD 17)
-        else()
-            set(CMAKE_CXX_STANDARD 14)
-        endif()
-    else()
-        set(CMAKE_CXX_STANDARD 17)
-    endif()
-endif()
+# CMAKE Pin cxx compiler to CXX17
+set(CMAKE_CXX_STANDARD 17)
 
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+project (pistache
+    LANGUAGES C CXX)
+
+include(GNUInstallDirs)
+
+add_compile_options(-Wall -Wextra -Wpedantic -Wconversion -Wno-sign-conversion -Wno-missing-field-initializers)
+
+option(BUILD_SHARED_LIBS "build shared library" ON)
+option(PISTACHE_BUILD_TESTS "build tests alongside the project" OFF)
+option(PISTACHE_ENABLE_NETWORK_TESTS "if tests are built, run ones needing network access" ON)
+option(PISTACHE_USE_SSL "add support for SSL server" OFF)
+option(PISTACHE_PIC "Enable pistache PIC" ON)
+option(PISTACHE_BUILD_FUZZ "Build fuzzer for oss-fuzz" OFF)
+
+# require fat LTO objects in static library
+if(CMAKE_INTERPROCEDURAL_OPTIMIZATION OR CMAKE_CXX_FLAGS MATCHES "-flto" OR CMAKE_CXX_FLAGS MATCHES "-flto=thin")
+    if(CMAKE_CXX_COMPILER_ID MATCHES "GNU")
+        add_compile_options(-ffat-lto-objects)
+    elseif(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+        add_compile_options(-flto=full)
+    endif()
+endif()
+
+set(THREADS_PREFER_PTHREAD_FLAG ON)
+find_package(Threads REQUIRED)
+
 if (PISTACHE_USE_SSL)
-    add_definitions(-DPISTACHE_USE_SSL)
-    link_libraries(-lssl -lcrypto)
-endif (PISTACHE_USE_SSL)
+    find_package(OpenSSL REQUIRED COMPONENTS SSL Crypto)
+endif ()
 
-include_directories (${CMAKE_CURRENT_SOURCE_DIR}/include)
-
-# Set version...
+# Set release version...
 
     # Retrieve from external file...
     file(READ "version.txt" VERSION_FILE)
@@ -105,6 +65,9 @@ include_directories (${CMAKE_CURRENT_SOURCE_DIR}/include)
         string(REGEX MATCH "VERSION_GIT_DATE *([0-9]+)" _ ${VERSION_FILE})
         set(VERSION_GIT_DATE ${CMAKE_MATCH_1})
 
+        # Full version
+        set(VERSION        ${VERSION_MAJOR}.${VERSION_MINOR}.${VERSION_PATCH}-git${VERSION_GIT_DATE})
+
     # Make available in a header file...
     configure_file (
         "include/pistache/version.h.in"
@@ -112,119 +75,50 @@ include_directories (${CMAKE_CURRENT_SOURCE_DIR}/include)
         @ONLY
     )
 
-    # Install version header...
-    if(PISTACHE_INSTALL)
-        install (
-            FILES
-            ${CMAKE_CURRENT_BINARY_DIR}/include/pistache/version.h
-            DESTINATION
-            ${CMAKE_INSTALL_INCLUDEDIR}/pistache/
-        )
-    endif()
+# Set public interface version...
 
-# Set libraries...
+    # Major should be incremented every time a non-backward compatible change
+    #  occurs in the ABI...
+    string(REGEX MATCH "SONAME_VERSION_MAJOR *([0-9]*)" _ ${VERSION_FILE})
+    set(SONAME_VERSION_MAJOR ${CMAKE_MATCH_1})
 
-    # Minimum...
-    set(LIBS "-lpistache -lpthread")
-
-    # If building with OpenSSL support...
-    if(PISTACHE_USE_SSL)
-        set(LIBS "${LIBS} -lssl -lcrypto")
-    endif(PISTACHE_USE_SSL)
-
-# Configure the pkg-config metadata...
-
-    # Initialize the metadata variables and to support remote builds...
-    set(prefix         ${CMAKE_INSTALL_PREFIX})
-    set(exec_prefix    ${CMAKE_INSTALL_PREFIX}/bin)
-    set(libdir         ${CMAKE_INSTALL_FULL_LIBDIR}/)
-    set(libs           ${LIBS})
-    set(includedir     ${CMAKE_INSTALL_FULL_INCLUDEDIR}/)
-    set(version        ${VERSION_MAJOR}.${VERSION_MINOR}.${VERSION_PATCH}-git${VERSION_GIT_DATE})
-
-    # Perform substitutions...
-    configure_file (
-        "libpistache.pc.in"
-        "libpistache.pc"
-        @ONLY
-    )
-
-    # Install pkg-config metadata into standard location within the prefix...
-    if(PISTACHE_INSTALL)
-        install (
-            FILES
-            ${CMAKE_CURRENT_BINARY_DIR}/libpistache.pc
-            DESTINATION
-            ${CMAKE_INSTALL_LIBDIR}/pkgconfig/
-        )
-    endif()
+    # Minor should be incremented every time a backward compatible change occurs
+    #  in the ABI...
+    string(REGEX MATCH "SONAME_VERSION_MINOR *([0-9]+)" _ ${VERSION_FILE})
+    set(SONAME_VERSION_MINOR ${CMAKE_MATCH_1})
 
 add_subdirectory (src)
 
-if (PISTACHE_BUILD_EXAMPLES)
-    add_subdirectory (examples)
-endif()
-
 if (PISTACHE_BUILD_TESTS)
-    find_package(GTest)
-    if (GTEST_FOUND)
-        include_directories(${GTEST_INCLUDE_DIRS})
-    else()
-        ADD_SUBDIRECTORY (third-party/googletest)
-        include_directories(${gtest_SOURCE_DIR}/include ${gtest_SOURCE_DIR})
+    include(CTest)
+    find_package(GTest QUIET)
+    if (NOT GTEST_FOUND)
+    message("GoogleTest not found. Consider installing it on your system. Downloading it from source...")
+    include(FetchContent)
+        FetchContent_Declare(
+            googletest
+            GIT_REPOSITORY https://github.com/google/googletest.git
+            GIT_SHALLOW true
+        )
+        set(BUILD_GMOCK OFF CACHE BOOL "")
+        FetchContent_GetProperties(googletest)
+        if(NOT googletest_POPULATED)
+            FetchContent_Populate(googletest)
+            add_subdirectory(${googletest_SOURCE_DIR} ${googletest_BINARY_DIR})
+        endif()
     endif()
-
-    enable_testing()
     add_subdirectory(tests)
 endif()
 
-if (PISTACHE_BUILD_DOCS)
-
-    find_package(Doxygen
-            REQUIRED dot
-            OPTIONAL_COMPONENTS mscgen dia)
-
-    if (DOXYGEN_FOUND)
-
-        set(DOXYGEN_IN ${CMAKE_SOURCE_DIR}/docs/Doxyfile.in)
-        set(DOXYGEN_OUT ${CMAKE_CURRENT_BINARY_DIR}/docs/Doxyfile)
-
-        configure_file(${DOXYGEN_IN} ${DOXYGEN_OUT} @ONLY)
-
-        add_custom_target(docs
-            COMMAND ${DOXYGEN_EXECUTABLE} ${DOXYGEN_OUT}
-            WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/docs
-            COMMENT "Generating doxygen documentation"
-            VERBATIM)
-
-        message("-- Adding doxygen documentation done")
-
-    else(DOXYGEN_FOUND)
-        message(FATAL_ERROR "Doxygen need to be installed to generate the doxygen documentation")
-    endif(DOXYGEN_FOUND)
-
+if (PISTACHE_BUILD_FUZZ) 
+    add_subdirectory(tests/fuzzers)
 endif()
 
-# Generate source tarball...
+# format target
 
-    # Define version of source archive...
-    set(CPACK_PACKAGE_VERSION_MAJOR     ${VERSION_MAJOR})
-    set(CPACK_PACKAGE_VERSION_MINOR     ${VERSION_MINOR})
-    set(CPACK_PACKAGE_VERSION_PATCH     ${VERSION_PATCH})
-
-    # Generate a .tar.bz2
-    set(CPACK_SOURCE_GENERATOR "TBZ2")
-
-    # Set filename...
-    set(CPACK_SOURCE_PACKAGE_FILE_NAME
-        "${CMAKE_PROJECT_NAME}-${CPACK_PACKAGE_VERSION_MAJOR}.${CPACK_PACKAGE_VERSION_MINOR}.${CPACK_PACKAGE_VERSION_PATCH}-git${VERSION_GIT_DATE}")
-
-    # Don't include these files in the archive...
-    set(CPACK_SOURCE_IGNORE_FILES
-      "/build/;/debian/;/prefix/;/.git*;~$;${CPACK_SOURCE_IGNORE_FILES}")
-
-    # Include the CPack module for generating the archive and add the standard
-    #  dist target to the generated makefile...
-    include(CPack)
-    add_custom_target(dist COMMAND ${CMAKE_MAKE_PROGRAM} package_source)
-
+add_custom_target(format
+    COMMAND
+        ./tools/format.sh
+    WORKING_DIRECTORY
+        ${CMAKE_CURRENT_SOURCE_DIR}
+)

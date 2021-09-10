@@ -1,13 +1,19 @@
-#include "gtest/gtest.h"
+/*
+ * SPDX-FileCopyrightText: 2018 knowledge4igor
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+#include <gtest/gtest.h>
 
 #include <pistache/net.h>
 
-#include <stdexcept>
 #include <iostream>
+#include <stdexcept>
 
-#include <sys/socket.h>
-#include <netinet/in.h>
 #include <arpa/inet.h>
+#include <netinet/in.h>
+#include <sys/socket.h>
 
 using namespace Pistache;
 
@@ -104,7 +110,7 @@ TEST(net_test, address_creation)
     ASSERT_EQ(address15.host(), "93.184.216.34");
     ASSERT_EQ(address15.family(), AF_INET);
     ASSERT_EQ(address15.port(), 80);
-    
+
     Address address16(IP(127, 0, 0, 1), Port(8080));
     ASSERT_EQ(address16.host(), "127.0.0.1");
     ASSERT_EQ(address16.family(), AF_INET);
@@ -114,7 +120,7 @@ TEST(net_test, address_creation)
     ASSERT_EQ(address17.host(), "0.0.0.0");
     ASSERT_EQ(address17.family(), AF_INET);
     ASSERT_EQ(address17.port(), 8080);
-    
+
     Address address18(IP(2, 0, 0, 0, 0, 0, 0, 1), Port(8080));
     ASSERT_EQ(address18.host(), "2::1");
     ASSERT_EQ(address18.family(), AF_INET6);
@@ -124,12 +130,12 @@ TEST(net_test, address_creation)
     ASSERT_EQ(address19.host(), "::");
     ASSERT_EQ(address19.family(), AF_INET6);
     ASSERT_EQ(address19.port(), 8080);
-    
+
     Address address20(IP::loopback(true), Port(8080));
     ASSERT_EQ(address20.host(), "::1");
     ASSERT_EQ(address20.family(), AF_INET6);
     ASSERT_EQ(address20.port(), 8080);
-    
+
     Address address21(IP::loopback(), Port(8080));
     ASSERT_EQ(address21.host(), "127.0.0.1");
     ASSERT_EQ(address21.family(), AF_INET);
@@ -144,7 +150,6 @@ TEST(net_test, address_creation)
     ASSERT_EQ(address23.host(), "::");
     ASSERT_EQ(address23.family(), AF_INET6);
     ASSERT_EQ(address23.port(), 80);
-
 }
 
 TEST(net_test, invalid_address)
@@ -153,7 +158,8 @@ TEST(net_test, invalid_address)
     ASSERT_THROW(Address("127.0.0.1:"), std::invalid_argument);
     ASSERT_THROW(Address("127.0.0.1:-10"), std::invalid_argument);
 
-    ASSERT_THROW(Address("[GGGG:GGGG:GGGG:GGGG:GGGG:GGGG:GGGG:GGGG]:8080");, std::invalid_argument);
+    ASSERT_THROW(Address("[GGGG:GGGG:GGGG:GGGG:GGGG:GGGG:GGGG:GGGG]:8080");
+                 , std::invalid_argument);
     ASSERT_THROW(Address("[::GGGG]:8080");, std::invalid_argument);
     ASSERT_THROW(Address("256.256.256.256:8080");, std::invalid_argument);
     ASSERT_THROW(Address("1.0.0.256:8080");, std::invalid_argument);
