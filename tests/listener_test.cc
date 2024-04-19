@@ -10,10 +10,15 @@
 #include <errno.h>
 #include <netdb.h>
 #include <netinet/in.h>
+#include <stdlib.h>
 #include <sys/socket.h>
 #include <sys/types.h>
 #include <unistd.h>
 
+#include <array>
+#include <sstream>
+
+#include <pistache/endpoint.h>
 #include <pistache/http.h>
 #include <pistache/listener.h>
 class SocketWrapper
@@ -65,12 +70,11 @@ public:
 SocketWrapper bind_free_port()
 {
     int sockfd; // listen on sock_fd, new connection on new_fd
-    addrinfo hints, *servinfo, *p;
+    struct addrinfo hints = {}, *servinfo, *p;
 
     int yes = 1;
     int rv;
 
-    memset(&hints, 0, sizeof hints);
     hints.ai_family   = AF_UNSPEC;
     hints.ai_socktype = SOCK_STREAM;
     hints.ai_flags    = AI_PASSIVE; // use my IP
@@ -242,6 +246,38 @@ TEST(listener_test, listener_bind_ephemeral_v6_port)
     ASSERT_TRUE(true);
 }
 
+TEST(listener_test, listener_bind_unix_domain)
+{
+    // Avoid name conflict by binding within a fresh temporary directory.
+#define DIR_TEMPLATE "/tmp/bind_test_XXXXXX"
+    auto dirTemplate  = std::array<char, sizeof DIR_TEMPLATE> { DIR_TEMPLATE };
+    const auto tmpDir = ::mkdtemp(dirTemplate.data());
+    ASSERT_TRUE(tmpDir != nullptr);
+    auto ss = std::stringstream();
+    ss << tmpDir << "/unix_socket";
+    const auto sockName = ss.str();
+
+    struct sockaddr_un sa = {};
+    sa.sun_family         = AF_UNIX;
+    std::strncpy(sa.sun_path, sockName.c_str(), sizeof sa.sun_path - 1);
+    // Belt and suspenders...
+    sa.sun_path[sizeof sa.sun_path - 1] = '\0';
+
+    auto address = Pistache::Address::fromUnix(reinterpret_cast<struct sockaddr*>(&sa));
+    auto opts    = Pistache::Http::Endpoint::options().threads(2);
+
+    // The test proper.  The Endpoint constructor creates and binds a
+    // listening socket with the unix domain address.  It should do so without
+    // throwing an exception.
+    auto endpoint = Pistache::Http::Endpoint((address));
+    endpoint.init(opts);
+    endpoint.shutdown();
+
+    // Clean up.
+    (void)::unlink(sockName.c_str());
+    (void)::rmdir(tmpDir);
+}
+
 class CloseOnExecTest : public testing::Test
 {
 public:
@@ -265,9 +301,9 @@ public:
     }
 
     /*
-   * we need to leak the socket through child process and verify that socket is
-   * still bound after child has quit
-   */
+     * we need to leak the socket through child process and verify that socket is
+     * still bound after child has quit
+     */
     void try_to_leak_socket(const Pistache::Tcp::Options options)
     {
         pid_t id = fork();
@@ -275,8 +311,10 @@ public:
         {
             auto server = prepare_listener(options);
             server->bind();
-            std::system(
-                "sleep 10 <&- &"); // leak open socket to child of our child process
+
+            // leak open socket to child of our child process
+            // static_cast<void> to ignore return value
+            [[maybe_unused]] int sys_res = (std::system("sleep 10 <&- &"));
             exit(0);
         }
 

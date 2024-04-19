@@ -8,16 +8,24 @@ SPDX-License-Identifier: Apache-2.0
 
 [![N|Solid](pistache.io/static/img/logo.png)](https://www.github.com/pistacheio/pistache)
 
+[![linux](https://github.com/pistacheio/pistache/actions/workflows/linux.yaml/badge.svg)](https://github.com/pistacheio/pistache/actions/workflows/linux.yaml)
 [![autopkgtest](https://github.com/pistacheio/pistache/actions/workflows/autopkgtest.yaml/badge.svg)](https://github.com/pistacheio/pistache/actions/workflows/autopkgtest.yaml)
+[![codecov](https://codecov.io/gh/pistacheio/pistache/branch/master/graph/badge.svg)](https://codecov.io/gh/pistacheio/pistache)
 [![REUSE status](https://api.reuse.software/badge/github.com/pistacheio/pistache)](https://api.reuse.software/info/github.com/pistacheio/pistache)
 
-Pistache is a modern and elegant HTTP and REST framework for C++. It is entirely written in pure-C++17 and provides a clear and pleasant API.
+Pistache is a modern and elegant HTTP and REST framework for C++. It is entirely written in pure-C++17[*](#linux-only) and provides a clear and pleasant API.
 
 ## Documentation
 
-We are still looking for a volunteer to document fully the API. In the mean time, partial documentation is available at [pistache.io](http://pistache.io). If you are interested in helping with this, please open an issue ticket.
+We are still looking for a volunteer to document fully the API. In the mean time, partial documentation is available at [pistacheio.github.io/pistache/](https://pistacheio.github.io/pistache/). If you are interested in helping with this, please open an issue ticket.
 
-A comparison of Pistache to other C++ RESTful APIs was created by guteksan and is available [here](https://github.com/guteksan/REST-CPP-benchmark).
+A benchmark comparison of Pistache to other C++ RESTful APIs was created by guteksan and is available [here](https://github.com/guteksan/REST-CPP-benchmark).
+
+## Articles, Tutorials & Videos
+
+* [Building an API in C++ With Pistache](https://levelup.gitconnected.com/building-an-api-in-c-with-pistache-413247535fd3)
+* [Adding a REST API with Pistache](https://www.youtube.com/watch?v=9BCO5W_Kw3Q)
+* [Slim Microservices with Pistache](https://www.dev-insider.de/schlanke-microservices-mit-pistache-a-87155e2f183e637103e19708200f8931/) (German)
 
 ## Dependencies
 
@@ -38,29 +46,25 @@ Pistache was originally created by Mathieu Stefani (`@octal`). He continues to c
 
 The [Launchpad Team](https://launchpad.net/~pistache+team) administers the daily and stable Ubuntu pre-compiled packages.
 
-### Release Versioning
+### Versioning
 
-Please update `version.txt` accordingly with each unstable or stable release.
+The version of the library's public interface (ABI) is not the same as the release version, but we choose to always guarantee that the major release version and the soname version will match. The interface version is primarily associated with the _external_ interface of the library. Different platforms handle this differently, such as AIX, GNU/Linux, and Solaris.
 
-### Interface Versioning
-
-The version of the library's public interface (ABI) is not the same as the release version. The interface version is primarily associated with the _external_ interface of the library. Different platforms handle this differently, such as AIX, GNU/Linux, and Solaris.
-
-GNU Libtool abstracts each platform's idiosyncrasies away because it is more portable than using `ar(1)` or `ranlib(1)` directly. However, it is a pain to integrate with CMake so we made do without it by setting the SONAME directly.
+GNU Libtool abstracts each platform's idiosyncrasies away because it is more portable than using `ar(1)` or `ranlib(1)` directly. However, it is [not supported in Meson](https://mesonbuild.com/FAQ.html#how-do-i-do-the-equivalent-of-libtools-exportsymbol-and-exportregex) so we made do without it by setting the SONAME directly.
 
 When Pistache is installed it will normally ship:
 
-- `libpistache-<release>.so.X.Y`: This is the actual shared-library binary file. The _X_ and _Y_ values are the major and minor interface versions respectively.
+- `libpistache.so.X.Y.Z`: This is the actual shared-library binary file. The _X_, _Y_ and _Z_ values are the major, minor and patch interface versions respectively.
 
-- `libpistache-<release>.so.X`: This is the _soname_ soft link that points to the binary file. It is what other programs and other libraries reference internally. You should never need to directly reference this file in your build environment.
+- `libpistache.so.X`: This is the _soname_ soft link that points to the binary file. It is what other programs and other libraries reference internally. You should never need to directly reference this file in your build environment.
 
-- `libpistache-<release>.so`: This is the _linker name_ entry. This is also a soft link that refers to the soname with the highest major interface version. This linker name is what is referred to on the linker command line. This file is created by the installation process.
+- `libpistache.so`: This is the _linker name_ entry. This is also a soft link that refers to the soname with the highest major interface version. This linker name is what is referred to on the linker command line.
 
-- `libpistache-<release>.a`: This is the _static archive_ form of the library. Since when using a static library all of its symbols are normally resolved before runtime, an interface version in the filename is unnecessary.
+- `libpistache.a`: This is the _static archive_ form of the library. Since when using a static library all of its symbols are normally resolved before runtime, an interface version in the filename is unnecessary.
 
 If your contribution has modified the interface, you may need to update the major or minor interface versions. Otherwise user applications and build environments will eventually break. This is because they will attempt to link against an incorrect version of the library -- or worse, link correctly but with undefined runtime behaviour.
 
-The major version should be incremented every time a non-backward compatible change occured in the ABI. The minor version should be incremented every time a backward compatible change occurs. This can be done by modifying `version.txt` accordingly.
+The major version should be incremented when you make incompatible API or ABI changes. The minor version should be incremented when you add functionality in a backwards compatible manner. The patch version should be incremented when you make backwards compatible bug fixes. This can be done by modifying `version.txt` accordingly. Also remember to always update the commit date in the aformentioned file.
 
 ## Precompiled Packages
 
@@ -68,9 +72,7 @@ If you have no need to modify the Pistache source, you are strongly recommended 
 
 ### Debian and Ubuntu
 
-We have submitted a [Request for Packaging](https://bugs.debian.org/cgi-bin/bugreport.cgi?bug=929593) downstream to Debian. Once we have an official Debian package maintainer intimately familiar with the [Debian Policy Manual](https://www.debian.org/doc/debian-policy/), we can expect to eventually see it become available in Debian and all derivatives (e.g. Ubuntu and many others).
-
-But until then currently Pistache has partially compliant upstream Debianization. Our long term goal is to have our source package properly Debianized downstream by a Debian Policy Manual SME. In the mean time consider using our PPAs to avoid having to build from source.
+Pistache is available in the official repositories since Debian 12 and Ubuntu 23.10, under the package name `libpistache-dev`.
 
 #### Supported Architectures
 
@@ -81,13 +83,14 @@ Currently Pistache is built and tested on a number of [architectures](https://wi
 - armhf
 - i386
 - ppc64el
+- riscv64
 - s390x
 
 #### Ubuntu PPA (Unstable)
 
 The project builds [daily unstable snapshots](https://launchpad.net/~pistache+team/+archive/ubuntu/unstable) in a separate unstable PPA. To use it, run the following:
 
-```console
+```sh
 $ sudo add-apt-repository ppa:pistache+team/unstable
 $ sudo apt update
 $ sudo apt install libpistache-dev
@@ -97,7 +100,7 @@ $ sudo apt install libpistache-dev
 
 Currently there are no stable release of Pistache published into the [stable](https://launchpad.net/~pistache+team/+archive/ubuntu/stable) PPA. However, when that time comes, run the following to install a stable package:
 
-```console
+```sh
 $ sudo add-apt-repository ppa:pistache+team/stable
 $ sudo apt update
 $ sudo apt install libpistache-dev
@@ -145,19 +148,19 @@ executable(
 If you want to build the library from source in case the dependency is not found on the system, you can add this repository as a submodule in the `subprojects` directory of your project, and edit the `dependency()` call as follows:
 
 ```meson
-dependencies: dependency('libpistache', fallback: 'pistache')
+dependency('libpistache', fallback: 'pistache')
 ```
 
 If you're using a Meson version older than 0.55.0 you'll have to use the "older" syntax for `dependency()`:
 
 ```meson
-dependencies: dependency('libpistache', fallback: ['pistache', 'pistache_dep'])
+dependency('libpistache', fallback: ['pistache', 'pistache_dep'])
 ```
 
 Lastly, if you'd like to build the fallback as a static library you can specify it with the `default_options` keyword:
 
 ```meson
-dependencies: dependency('libpistache', fallback: 'pistache', default_options: 'default_library=static')
+dependency('libpistache', fallback: 'pistache', default_options: 'default_library=static')
 ```
 
 ### CMake
@@ -199,18 +202,20 @@ Now, compile the sources:
 
 ```sh
 $ cd pistache
-$ meson setup build \
-    --buildtype=release \
-    -DPISTACHE_USE_SSL=true \
-    -DPISTACHE_BUILD_EXAMPLES=true \
-    -DPISTACHE_BUILD_TESTS=true \
-    -DPISTACHE_BUILD_DOCS=false \
-    --prefix=$PWD/prefix
+$ meson setup build                                 \
+    --buildtype=release                             \
+    -DPISTACHE_USE_SSL=true                         \
+    -DPISTACHE_BUILD_EXAMPLES=true                  \
+    -DPISTACHE_BUILD_TESTS=true                     \
+    -DPISTACHE_BUILD_DOCS=false                     \
+    -DPISTACHE_USE_CONTENT_ENCODING_BROTLI=true     \
+    -DPISTACHE_USE_CONTENT_ENCODING_DEFLATE=true    \
+    --prefix="$PWD/prefix"
 $ meson compile -C build
 $ meson install -C build
 ```
 
-Optionally, you can also run the tests:
+Optionally, you can also run the tests. You can skip tests requiring network access with `--no-suite=network`:
 
 ```sh
 $ meson test -C build
@@ -220,13 +225,14 @@ Be patient, async_test can take some time before completing. And that's it, now 
 
 Some other Meson options:
 
-| Option                        | Default | Description                                    |
-| ----------------------------- | ------- | ---------------------------------------------- |
-| PISTACHE_USE_SSL              | False   | Build server with SSL support                  |
-| PISTACHE_BUILD_TESTS          | False   | Build all of the unit tests                    |
-| PISTACHE_ENABLE_NETWORK_TESTS | True    | Run unit tests requiring remote network access |
-| PISTACHE_BUILD_EXAMPLES       | False   | Build all of the example apps                  |
-| PISTACHE_BUILD_DOCS           | False   | Build Doxygen docs                             |
+| Option                                | Default | Description                                    |
+| ------------------------------------- | ------- | ---------------------------------------------- |
+| PISTACHE_USE_SSL                      | False   | Build server with SSL support                  |
+| PISTACHE_BUILD_TESTS                  | False   | Build all of the unit tests                    |
+| PISTACHE_BUILD_EXAMPLES               | False   | Build all of the example apps                  |
+| PISTACHE_BUILD_DOCS                   | False   | Build Doxygen docs                             |
+| PISTACHE_USE_CONTENT_ENCODING_BROTLI  | False   | Build with Brotli content encoding support     |
+| PISTACHE_USE_CONTENT_ENCODING_DEFLATE | False   | Build with deflate content encoding support    |
 
 ## Example
 
@@ -239,7 +245,7 @@ using namespace Pistache;
 
 struct HelloHandler : public Http::Handler {
   HTTP_PROTOTYPE(HelloHandler)
-  void onRequest(const Http::Request&, Http::ResponseWriter writer) override{
+  void onRequest(const Http::Request&, Http::ResponseWriter writer) override {
     writer.send(Http::Code::Ok, "Hello, World!");
   }
 };
@@ -249,6 +255,12 @@ int main() {
 }
 ```
 
+## Tutorials
+
+* [Adding a REST API with Pistache](https://www.youtube.com/watch?v=9BCO5W_Kw3Q), Utah Cpp Programmers, 20 July 2022.
+
 ## Project status
 
 Pistache hasn't yet hit the 1.0 release. This means that the project is _unstable_ but not _unusable_. In fact, most of the code is production ready; you can use Pistache to develop a RESTful API without issues, but the HTTP client has a few issues in it that make it buggy.
+
+<b id="linux-only">\*</b> While most code uses modern C++, Pistache makes use of some Linux-specific APIs where the standard library doesn't provide alternatives, and works only on that OS. See [#6](https://github.com/pistacheio/pistache/issues/6#issuecomment-242398225) for details. If you know how to help, please contribute a PR to add support for your desired platform :)

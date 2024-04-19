@@ -28,6 +28,7 @@
 
 #include <chrono>
 #include <memory>
+#include <string>
 #include <vector>
 
 #include <cerrno>
@@ -39,6 +40,8 @@
 #include <openssl/ssl.h>
 
 #endif /* PISTACHE_USE_SSL */
+
+using namespace std::chrono_literals;
 
 namespace Pistache::Tcp
 {
@@ -84,7 +87,8 @@ namespace Pistache::Tcp
 
         ssl::SSLCtxPtr ssl_create_context(const std::string& cert,
                                           const std::string& key,
-                                          bool use_compression)
+                                          bool use_compression,
+                                          int (*cb)(char*, int, int, void*))
         {
             const SSL_METHOD* method = SSLv23_server_method();
 
@@ -103,6 +107,12 @@ namespace Pistache::Tcp
                         + ssl_print_errors_to_string();
                     throw std::runtime_error(err);
                 }
+            }
+
+            if (cb != NULL)
+            {
+                /* Use the user-defined callback for password if provided */
+                SSL_CTX_set_default_passwd_cb(GetSSLContext(ctx), cb);
             }
 
 /* Function introduced in 1.0.2 */
@@ -131,6 +141,8 @@ namespace Pistache::Tcp
                 throw std::runtime_error(err);
             }
 
+            SSL_CTX_set_mode(GetSSLContext(ctx), SSL_MODE_ENABLE_PARTIAL_WRITE);
+            SSL_CTX_set_mode(GetSSLContext(ctx), SSL_MODE_ACCEPT_MOVING_WRITE_BUFFER);
             return ctx;
         }
 
@@ -238,55 +250,33 @@ namespace Pistache::Tcp
 
     void Listener::bind() { bind(addr_); }
 
-    void Listener::bind(const Address& address)
+    // Abstracts out binding-related processing common to both IP-based sockets
+    // and unix domain-based sockets.  Called from bind()  below.
+    //
+    // Attempts to bind the address described by addr and set up a
+    // corresponding socket as a listener, returning true upon success and
+    // false on failure.  Sets listen_fd on success.
+    bool Listener::bindListener(const struct addrinfo* addr)
     {
-        addr_ = address;
+        auto socktype = addr->ai_socktype;
+        if (options_.hasFlag(Options::CloseOnExec))
+            socktype |= SOCK_CLOEXEC;
 
-        struct addrinfo hints;
-        memset(&hints, 0, sizeof(struct addrinfo));
-        hints.ai_family   = address.family();
-        hints.ai_socktype = SOCK_STREAM;
-        hints.ai_flags    = AI_PASSIVE;
-        hints.ai_protocol = 0;
-
-        const auto& host = addr_.host();
-        const auto& port = addr_.port().toString();
-        AddrInfo addr_info;
-
-        TRY(addr_info.invoke(host.c_str(), port.c_str(), &hints));
-
-        int fd = -1;
-
-        const addrinfo* addr = nullptr;
-        for (addr = addr_info.get_info_ptr(); addr; addr = addr->ai_next)
+        int fd = ::socket(addr->ai_family, socktype, addr->ai_protocol);
+        if (fd < 0)
         {
-            auto socktype = addr->ai_socktype;
-            if (options_.hasFlag(Options::CloseOnExec))
-                socktype |= SOCK_CLOEXEC;
-
-            fd = ::socket(addr->ai_family, socktype, addr->ai_protocol);
-            if (fd < 0)
-                continue;
-
-            setSocketOptions(fd, options_);
-
-            if (::bind(fd, addr->ai_addr, addr->ai_addrlen) < 0)
-            {
-                close(fd);
-                continue;
-            }
-
-            TRY(::listen(fd, backlog_));
-            break;
+            return false;
         }
 
-        // At this point, it is still possible that we couldn't bind any socket. If it
-        // is the case, the previous loop would have exited naturally and addr will be
-        // null.
-        if (addr == nullptr)
+        setSocketOptions(fd, options_);
+
+        if (::bind(fd, addr->ai_addr, addr->ai_addrlen) < 0)
         {
-            throw std::runtime_error(strerror(errno));
+            close(fd);
+            return false;
         }
+
+        TRY(::listen(fd, backlog_));
 
         make_non_blocking(fd);
         poller.addFd(fd, Flags<Polling::NotifyOn>(Polling::NotifyOn::Read),
@@ -297,6 +287,61 @@ namespace Pistache::Tcp
 
         reactor_.init(Aio::AsyncContext(workers_, workersName_));
         transportKey = reactor_.addHandler(transport);
+
+        return true;
+    }
+
+    void Listener::bind(const Address& address)
+    {
+        addr_ = address;
+
+        auto found            = false;
+        const auto family     = address.family();
+        struct addrinfo hints = {};
+        hints.ai_family       = family;
+        hints.ai_socktype     = SOCK_STREAM;
+        hints.ai_flags        = AI_PASSIVE;
+
+        if (family == AF_UNIX)
+        {
+            const struct sockaddr& sa = address.getSockAddr();
+            // unix domain sockets are confined to the local host, so there's
+            // no question of finding the best address.  It's simply the one
+            // hiding inside the address object.
+            //
+            // Impedance match the unix domain address into a suitable argument
+            // to bindListener().
+            hints.ai_protocol = 0;
+            hints.ai_addr     = const_cast<struct sockaddr*>(&sa);
+            hints.ai_addrlen  = address.addrLen();
+            found             = bindListener(&hints);
+        }
+        else
+        {
+            const auto& host = addr_.host();
+            const auto& port = addr_.port().toString();
+            AddrInfo addr_info;
+
+            TRY(addr_info.invoke(host.c_str(), port.c_str(), &hints));
+
+            const addrinfo* addr = nullptr;
+            for (addr = addr_info.get_info_ptr(); addr; addr = addr->ai_next)
+            {
+                found = bindListener(addr);
+                if (found)
+                {
+                    break;
+                }
+            }
+        }
+
+        //
+        // At this point, it is still possible that we couldn't bind any socket.
+        //
+        if (!found)
+        {
+            throw std::runtime_error(strerror(errno));
+        }
     }
 
     bool Listener::isBound() const { return listen_fd != -1; }
@@ -316,16 +361,29 @@ namespace Pistache::Tcp
             return Port();
         }
 
-        struct sockaddr_in sock_addr = { 0 };
-        socklen_t addrlen            = sizeof(sock_addr);
-        auto* sock_addr_alias        = reinterpret_cast<struct sockaddr*>(&sock_addr);
+        struct sockaddr_storage sock_addr = {};
+        socklen_t addrlen                 = sizeof(sock_addr);
+        auto* sock_addr_alias             = reinterpret_cast<struct sockaddr*>(&sock_addr);
 
         if (-1 == getsockname(listen_fd, sock_addr_alias, &addrlen))
         {
             return Port();
         }
 
-        return Port(ntohs(sock_addr.sin_port));
+        if (sock_addr.ss_family == AF_INET)
+        {
+            auto* sock_addr_in = reinterpret_cast<struct sockaddr_in*>(&sock_addr);
+            return Port(ntohs(sock_addr_in->sin_port));
+        }
+        else if (sock_addr.ss_family == AF_INET6)
+        {
+            auto* sock_addr_in6 = reinterpret_cast<struct sockaddr_in6*>(&sock_addr);
+            return Port(ntohs(sock_addr_in6->sin6_port));
+        }
+        else
+        {
+            return Port();
+        }
     }
 
     void Listener::run()
@@ -466,6 +524,24 @@ namespace Pistache::Tcp
                 throw ServerError(err.c_str());
             }
 
+            // If user requested SSL handshake timeout, enable it on the socket.
+            //  This is sometimes necessary if a client connects, sends nothing,
+            //  or possibly refuses to accept any bytes, and never completes a
+            //  handshake. This would have left SSL_accept hanging indefinitely
+            //  and is effectively a DoS...
+            if (sslHandshakeTimeout_ > 0ms)
+            {
+                struct timeval timeout;
+
+                timeout.tv_sec = std::chrono::duration_cast<std::chrono::seconds>(sslHandshakeTimeout_).count();
+
+                const auto residual_microseconds = std::chrono::duration_cast<std::chrono::microseconds>(sslHandshakeTimeout_) - std::chrono::duration_cast<std::chrono::seconds>(sslHandshakeTimeout_);
+                timeout.tv_usec                  = residual_microseconds.count();
+
+                TRY(::setsockopt(client_fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout)));
+                TRY(::setsockopt(client_fd, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof(timeout)));
+            }
+
             SSL_set_fd(ssl_data, client_fd);
             SSL_set_accept_state(ssl_data);
 
@@ -478,6 +554,19 @@ namespace Pistache::Tcp
                 close(client_fd);
                 return;
             }
+
+            // Remove socket timeouts if they were enabled now that we have
+            //  handshaked...
+            if (sslHandshakeTimeout_ > 0ms)
+            {
+                struct timeval timeout;
+                timeout.tv_sec  = 0;
+                timeout.tv_usec = 0;
+
+                TRY(::setsockopt(client_fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout)));
+                TRY(::setsockopt(client_fd, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof(timeout)));
+            }
+
             ssl = static_cast<void*>(ssl_data);
         }
 #endif /* PISTACHE_USE_SSL */
@@ -567,7 +656,7 @@ namespace Pistache::Tcp
         SSL_CTX_set_verify(GetSSLContext(ssl_ctx_),
                            SSL_VERIFY_PEER | SSL_VERIFY_FAIL_IF_NO_PEER_CERT | SSL_VERIFY_CLIENT_ONCE,
 /* Callback type did change in 1.0.1 */
-#if OPENSSL_VERSION_NUMBER < 0x10100000L
+#if OPENSSL_VERSION_NUMBER < 0x10100000L || defined(LIBRESSL_VERSION_NUMBER)
                            (int (*)(int, X509_STORE_CTX*))cb
 #else
                            (SSL_verify_cb)cb
@@ -576,23 +665,41 @@ namespace Pistache::Tcp
     }
 
     void Listener::setupSSL(const std::string& cert_path,
-                            const std::string& key_path, bool use_compression)
+                            const std::string& key_path,
+                            bool use_compression,
+                            int (*cb_password)(char*, int, int, void*),
+                            std::chrono::milliseconds sslHandshakeTimeout)
     {
         SSL_load_error_strings();
         OpenSSL_add_ssl_algorithms();
 
         try
         {
-            ssl_ctx_ = ssl_create_context(cert_path, key_path, use_compression);
+            ssl_ctx_ = ssl_create_context(cert_path, key_path, use_compression, cb_password);
         }
         catch (std::exception& e)
         {
             PISTACHE_LOG_STRING_FATAL(logger_, e.what());
             throw;
         }
-        useSSL_ = true;
+        sslHandshakeTimeout_ = sslHandshakeTimeout;
+        useSSL_              = true;
     }
 
 #endif /* PISTACHE_USE_SSL */
+
+    std::vector<std::shared_ptr<Tcp::Peer>> Listener::getAllPeer()
+    {
+        std::vector<std::shared_ptr<Tcp::Peer>> vecPeers;
+        auto handlers = reactor_.handlers(transportKey);
+
+        for (const auto& handler : handlers)
+        {
+            auto transport = std::static_pointer_cast<Transport>(handler);
+            auto peers     = transport->getAllPeer();
+            vecPeers.insert(vecPeers.end(), peers.begin(), peers.end());
+        }
+        return vecPeers;
+    }
 
 } // namespace Pistache::Tcp

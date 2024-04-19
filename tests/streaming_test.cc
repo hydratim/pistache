@@ -126,8 +126,7 @@ namespace
 
 // from
 // https://stackoverflow.com/questions/6624667/can-i-use-libcurls-curlopt-writefunction-with-a-c11-lambda-expression#14720398
-typedef size_t (*CURL_WRITEFUNCTION_PTR)(void*, size_t, size_t, void*);
-auto curl_callback = [](void* ptr, size_t size, size_t nmemb,
+auto curl_callback = +[](void* ptr, size_t size, size_t nmemb,
                         void* userdata) -> size_t {
     auto* chunks = static_cast<Chunks*>(userdata);
     chunks->emplace_back(static_cast<char*>(ptr), size * nmemb);
@@ -140,7 +139,7 @@ public:
     StreamingTests()
         : address(Pistache::Ipv4::any(), Pistache::Port(0))
         , endpoint(address)
-        , curl(curl_easy_init())
+        , curl(curl_easy_init()) // calls curl_global_init automatically
     {
     }
 
@@ -167,8 +166,7 @@ public:
         url = "http://localhost:" + std::to_string(endpoint.getPort()) + "/";
 
         curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
-        curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION,
-                         static_cast<CURL_WRITEFUNCTION_PTR>(curl_callback));
+        curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, curl_callback);
         curl_easy_setopt(curl, CURLOPT_WRITEDATA, &chunks);
         curl_easy_setopt(curl, CURLOPT_VERBOSE, 1L);
     }
@@ -266,4 +264,86 @@ TEST_F(StreamingTests, ChunkedStream)
     EXPECT_EQ(chunks[0], "Hello ");
     EXPECT_EQ(chunks[1], "world");
     EXPECT_EQ(chunks[2], "!");
+}
+
+class ClientDisconnectHandler : public Http::Handler {
+public:
+    HTTP_PROTOTYPE(ClientDisconnectHandler)
+
+    void onRequest(const Http::Request&, Http::ResponseWriter response) override
+    {
+        auto stream = response.stream(Http::Code::Ok);
+
+        stream << "Hello ";
+        stream.flush();
+
+        std::this_thread::sleep_for(std::chrono::seconds(1));
+
+        stream << "world";
+        stream.flush();
+
+        std::this_thread::sleep_for(std::chrono::seconds(1));
+
+        stream << "!";
+        stream.ends();
+    }
+};
+
+// MUST be LAST test, since it calls curl_global_cleanup
+TEST(StreamingTest, ClientDisconnect)
+{
+    Http::Endpoint endpoint(Address(IP::loopback(), Port(0)));
+    endpoint.init(Http::Endpoint::options().flags(Tcp::Options::ReuseAddr));
+    endpoint.setHandler(Http::make_handler<ClientDisconnectHandler>());
+    endpoint.serveThreaded();
+
+    const std::string url = "http://localhost:" + std::to_string(endpoint.getPort());
+
+    {   // encapsulate the "thread" variable
+        // 
+        // If we don't encapsulate "thread" in this fashion (i.e. if we have
+        // "thread" remain in scope until the end of the function), then the
+        // github test runners will believe that this TEST has a memory leak
+        // when libevent is in use, and so fail. Specifically, the gtest/github
+        // test makes it appear that we have leaked an Fd/EmEvent.
+        //
+        // With this encapsulation in place, there is no leak detected. It is
+        // not clear to me why "thread" going out of scope should allow the Fd
+        // to be freed, but equally it seems OK that the thread should have to
+        // be out of scope before the Fd resource is released.
+
+        std::thread thread([&url]() {
+            CURL* curl = curl_easy_init();
+            curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
+            curl_easy_setopt(curl, CURLOPT_VERBOSE, 1L);
+
+            CURLM* curlm = curl_multi_init();
+            int still_running = 1;
+            curl_multi_add_handle(curlm, curl);
+
+            // This sequence of _perform, _wait, _perform starts a requests
+            // (all 3 are needed)
+            curl_multi_perform(curlm, &still_running);
+            if (still_running)
+            {
+                curl_multi_wait(curlm, NULL, 0, 1000, NULL);
+                curl_multi_perform(curlm, &still_running);
+            }
+
+            // Hard-close the client request & socket before server is done
+            // responding
+            curl_multi_cleanup(curlm);
+            curl_easy_cleanup(curl);
+        });
+
+        if (thread.joinable())
+        {
+            thread.join();
+        }
+    } // end encapsulate
+
+    // Don't care about response content, this test will fail if SIGPIPE is raised
+
+    endpoint.shutdown();
+    curl_global_cleanup();
 }

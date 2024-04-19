@@ -13,18 +13,32 @@
 
 #include <gtest/gtest.h>
 
+#ifdef PISTACHE_USE_CONTENT_ENCODING_BROTLI
+#include <brotli/decode.h>
+#endif
+
+#ifdef PISTACHE_USE_CONTENT_ENCODING_DEFLATE
+#include <zlib.h>
+#endif
+
+#include <algorithm>
 #include <chrono>
 #include <condition_variable>
+#include <cstddef>
 #include <fstream>
 #include <future>
 #include <mutex>
+#include <numeric>
+#include <random>
 #include <sstream>
 #include <string>
 #include <thread>
 
+#include "helpers/fd_utils.h"
 #include "tcp_client.h"
 
 using namespace Pistache;
+using namespace std::chrono;
 
 namespace
 {
@@ -259,7 +273,7 @@ TEST(http_server_test,
 
     const int CLIENT_REQUEST_SIZE = 1;
     int counter                   = clientLogicFunc(CLIENT_REQUEST_SIZE, server_address,
-                                  ONE_SECOND_TIMEOUT, SIX_SECONDS_DELAY);
+                                                    ONE_SECOND_TIMEOUT, SIX_SECONDS_DELAY);
 
     server.shutdown();
 
@@ -289,7 +303,7 @@ TEST(
 
     const int CLIENT_REQUEST_SIZE = 3;
     int counter                   = clientLogicFunc(CLIENT_REQUEST_SIZE, server_address,
-                                  ONE_SECOND_TIMEOUT, SIX_SECONDS_DELAY);
+                                                    ONE_SECOND_TIMEOUT, SIX_SECONDS_DELAY);
 
     server.shutdown();
 
@@ -321,6 +335,41 @@ TEST(http_server_test, multiple_client_with_requests_to_multithreaded_server)
     std::future<int> result2(
         std::async(clientLogicFunc, SECOND_CLIENT_REQUEST_SIZE, server_address,
                    NO_TIMEOUT, SIX_SECONDS_TIMOUT));
+
+    int res1 = result1.get();
+    int res2 = result2.get();
+
+    server.shutdown();
+
+    ASSERT_EQ(res1, FIRST_CLIENT_REQUEST_SIZE);
+    ASSERT_EQ(res2, SECOND_CLIENT_REQUEST_SIZE);
+}
+
+TEST(http_server_test, many_client_with_requests_to_multithreaded_server)
+{
+    const Pistache::Address address("localhost", Pistache::Port(0));
+
+    Http::Endpoint server(address);
+    auto flags       = Tcp::Options::ReuseAddr;
+    auto server_opts = Http::Endpoint::options().flags(flags).threads(6);
+    server.init(server_opts);
+    LOGGER("test", "Trying to run server...");
+    server.setHandler(Http::make_handler<HelloHandlerWithDelay>());
+    ASSERT_NO_THROW(server.serveThreaded());
+
+    const std::string server_address = "localhost:" + server.getPort().toString();
+    LOGGER("test", "Server address: " << server_address);
+
+    const int NO_TIMEOUT                = 0;
+    const int SECONDS_TIMOUT            = 10;
+    const int FIRST_CLIENT_REQUEST_SIZE = 128;
+    std::future<int> result1(std::async(clientLogicFunc,
+                                        FIRST_CLIENT_REQUEST_SIZE, server_address,
+                                        NO_TIMEOUT, SECONDS_TIMOUT));
+    const int SECOND_CLIENT_REQUEST_SIZE = 192;
+    std::future<int> result2(
+        std::async(clientLogicFunc, SECOND_CLIENT_REQUEST_SIZE, server_address,
+                   NO_TIMEOUT, SECONDS_TIMOUT));
 
     int res1 = result1.get();
     int res2 = result2.get();
@@ -465,7 +514,18 @@ TEST(http_server_test, server_request_copies_address)
     client.shutdown();
     server.shutdown();
 
-    ASSERT_EQ("127.0.0.1", resultData);
+    if (address.family() == AF_INET)
+    {
+        ASSERT_EQ("127.0.0.1", resultData);
+    }
+    else if (address.family() == AF_INET6)
+    {
+        ASSERT_EQ("::1", resultData);
+    }
+    else
+    {
+        ASSERT_TRUE(false);
+    }
 }
 
 struct ResponseSizeHandler : public Http::Handler
@@ -534,7 +594,18 @@ TEST(http_server_test, response_size_captured)
     server.shutdown();
 
     // Sanity check (stolen from AddressEchoHandler test).
-    ASSERT_EQ("127.0.0.1", resultData);
+    if (address.family() == AF_INET)
+    {
+        ASSERT_EQ("127.0.0.1", resultData);
+    }
+    else if (address.family() == AF_INET6)
+    {
+        ASSERT_EQ("::1", resultData);
+    }
+    else
+    {
+        ASSERT_TRUE(false);
+    }
 
     LOGGER("test", "Response size is " << rsize);
     ASSERT_GT(rsize, 1u);
@@ -832,4 +903,359 @@ TEST(http_server_test, client_multiple_requests_disconnects_handled)
     server.shutdown();
 
     ASSERT_EQ(result, true);
+}
+
+struct ContentEncodingHandler : public Http::Handler
+{
+    HTTP_PROTOTYPE(ContentEncodingHandler)
+
+    ContentEncodingHandler()
+    { }
+
+    // Take whatever the client sent us and send it back compressed...
+    void onRequest(const Http::Request& request,
+                   Http::ResponseWriter writer) override
+    {
+        LOGGER("server", "ContentEncodingHandler::onResponse()");
+
+        // Get the client body...
+        const auto client_body = request.body();
+
+        // Compress differently, depending on requested encoding...
+        const auto encoding = request.getBestAcceptEncoding();
+
+        // Enable the best compression...
+        writer.setCompression(encoding);
+
+        // Set compression level...
+        switch (encoding)
+        {
+
+#ifdef PISTACHE_USE_CONTENT_ENCODING_BROTLI
+        // Set maximum compression if using Brotli
+        case Http::Header::Encoding::Br:
+            writer.setCompressionBrotliLevel(BROTLI_MAX_QUALITY);
+            break;
+#endif
+
+#ifdef PISTACHE_USE_CONTENT_ENCODING_DEFLATE
+        // Set maximum compression if using deflate/zlib
+        case Http::Header::Encoding::Deflate:
+            writer.setCompressionDeflateLevel(Z_BEST_COMPRESSION);
+            break;
+#endif
+
+        default:
+            break;
+        }
+
+        // Send compressed response of original client body...
+        writer.send(Http::Code::Ok, client_body);
+    }
+};
+
+#ifdef PISTACHE_USE_CONTENT_ENCODING_BROTLI
+TEST(http_server_test, server_with_content_encoding_brotli)
+{
+    // Data to send to server to expect it to return compressed...
+
+    // Allocate storage...
+    std::vector<std::byte> originalUncompressedData(1024);
+
+    // Random bytes engine...
+    using random_bytes_engine_type = std::independent_bits_engine<
+        std::default_random_engine, CHAR_BIT, unsigned char>;
+    random_bytes_engine_type randomEngine;
+
+    // Fill with random bytes...
+    std::generate(
+        std::begin(originalUncompressedData),
+        std::end(originalUncompressedData),
+        [&randomEngine]() { return static_cast<std::byte>(randomEngine()); });
+
+    // Bind server to localhost on a random port...
+    const Pistache::Address address("localhost", Pistache::Port(0));
+
+    // Initialize server...
+    Http::Endpoint server(address);
+    auto flags       = Tcp::Options::ReuseAddr;
+    auto server_opts = Http::Endpoint::options().flags(flags);
+    server_opts.maxRequestSize(1024 * 1024 * 20);
+    server_opts.maxResponseSize(1024 * 1024 * 20);
+    server.init(server_opts);
+    server.setHandler(Http::make_handler<ContentEncodingHandler>());
+    server.serveThreaded();
+
+    // Verify server is running...
+    ASSERT_TRUE(server.isBound());
+
+    // Log server coordinates...
+    const std::string server_address = "localhost:" + server.getPort().toString();
+    LOGGER("test", "Server address: " << server_address);
+
+    // Initialize client...
+
+    // Construct and initialize...
+    Http::Experimental::Client client;
+    client.init();
+
+    // Set server to connect to and get request builder object...
+    auto rb = client.get(server_address);
+
+    // Set data to send as body...
+    rb.body(
+        std::string(
+            reinterpret_cast<const char*>(originalUncompressedData.data()),
+            originalUncompressedData.size()));
+
+    // Request server send back response Brotli compressed...
+    rb.header<Http::Header::AcceptEncoding>(Http::Header::Encoding::Br);
+
+    // Send client request. Note that Transport::asyncSendRequestImpl() is
+    //  buggy, or at least with Pistache::Client, when the amount of data being
+    //  sent is large. When that happens send() breaks in asyncSendRequestImpl()
+    //  receiving an errno=EAGAIN...
+    auto response = rb.send();
+
+    // Storage for server response body...
+    std::string resultStringData;
+
+    // Verify response code, expected header, and store its body...
+    response.then(
+        [&resultStringData](Http::Response resp) {
+            // Log response code...
+            LOGGER("client", "Response code: " << resp.code());
+
+            // Log Content-Encoding header value, if present...
+            if (resp.headers().tryGetRaw("Content-Encoding").has_value())
+            {
+                LOGGER("client", "Content-Encoding: " << resp.headers().tryGetRaw("Content-Encoding").value().value());
+            }
+
+            // Preserve body only if response code as expected...
+            if (resp.code() == Http::Code::Ok)
+                resultStringData = resp.body();
+
+            // Get response headers...
+            const auto& headers = resp.headers();
+
+            // Verify Content-Encoding header was present...
+            ASSERT_TRUE(headers.has<Http::Header::ContentEncoding>());
+
+            // Verify Content-Encoding was set to Brotli...
+            const auto ce = headers.get<Http::Header::ContentEncoding>().get();
+            ASSERT_EQ(ce->encoding(), Http::Header::Encoding::Br);
+        },
+        Async::Throw);
+
+    // Wait for response to complete...
+    Async::Barrier<Http::Response> barrier(response);
+    barrier.wait();
+
+    // Cleanup client and server...
+    client.shutdown();
+    server.shutdown();
+
+    // Get server response body in vector...
+    std::vector<std::byte> newlyCompressedResponse(resultStringData.size());
+    std::transform(
+        std::cbegin(resultStringData),
+        std::cend(resultStringData),
+        std::begin(newlyCompressedResponse),
+        [](const char character) { return static_cast<std::byte>(character); });
+
+    // The data the server responded with should be compressed, and therefore
+    //  different from the original uncompressed sent during the request...
+    ASSERT_NE(originalUncompressedData, newlyCompressedResponse);
+
+    // Decompress response body...
+
+    // Storage for decompressed data...
+    std::vector<std::byte> newlyDecompressedData(
+        originalUncompressedData.size());
+
+    // Size of destination buffer, but will be updated by uncompress() to
+    //  actual size used...
+    size_t destinationLength = originalUncompressedData.size();
+
+    // Decompress...
+    const auto compressionStatus = ::BrotliDecoderDecompress(
+        resultStringData.size(),
+        reinterpret_cast<const uint8_t*>(resultStringData.data()),
+        &destinationLength,
+        reinterpret_cast<uint8_t*>(newlyDecompressedData.data()));
+
+    // Check for failure...
+    ASSERT_EQ(compressionStatus, BROTLI_DECODER_RESULT_SUCCESS);
+
+    // The sizes of both the original uncompressed data we sent the server
+    //  and the result of decompressing what it sent back should match...
+    ASSERT_EQ(originalUncompressedData.size(), destinationLength);
+
+    // Check to ensure the compressed data received back from server after
+    //  decompression matches exactly what we originally sent it...
+    ASSERT_EQ(originalUncompressedData, newlyDecompressedData);
+}
+#endif
+
+#ifdef PISTACHE_USE_CONTENT_ENCODING_DEFLATE
+TEST(http_server_test, server_with_content_encoding_deflate)
+{
+    // Data to send to server to expect it to return compressed...
+
+    // Allocate storage...
+    std::vector<std::byte> originalUncompressedData(1024);
+
+    // Random bytes engine...
+    using random_bytes_engine_type = std::independent_bits_engine<
+        std::default_random_engine, CHAR_BIT, unsigned char>;
+    random_bytes_engine_type randomEngine;
+
+    // Fill with random bytes...
+    std::generate(
+        std::begin(originalUncompressedData),
+        std::end(originalUncompressedData),
+        [&randomEngine]() { return static_cast<std::byte>(randomEngine()); });
+
+    // Bind server to localhost on a random port...
+    const Pistache::Address address("localhost", Pistache::Port(0));
+
+    // Initialize server...
+    Http::Endpoint server(address);
+    auto flags       = Tcp::Options::ReuseAddr;
+    auto server_opts = Http::Endpoint::options().flags(flags);
+    server_opts.maxRequestSize(1024 * 1024 * 20);
+    server_opts.maxResponseSize(1024 * 1024 * 20);
+    server.init(server_opts);
+    server.setHandler(Http::make_handler<ContentEncodingHandler>());
+    server.serveThreaded();
+
+    // Verify server is running...
+    ASSERT_TRUE(server.isBound());
+
+    // Log server coordinates...
+    const std::string server_address = "localhost:" + server.getPort().toString();
+    LOGGER("test", "Server address: " << server_address);
+
+    // Initialize client...
+
+    // Construct and initialize...
+    Http::Experimental::Client client;
+    client.init();
+
+    // Set server to connect to and get request builder object...
+    auto rb = client.get(server_address);
+
+    // Set data to send as body...
+    rb.body(
+        std::string(
+            reinterpret_cast<const char*>(originalUncompressedData.data()),
+            originalUncompressedData.size()));
+
+    // Request server send back response deflate compressed...
+    rb.header<Http::Header::AcceptEncoding>(Http::Header::Encoding::Deflate);
+
+    // Send client request. Note that Transport::asyncSendRequestImpl() is
+    //  buggy, or at least with Pistache::Client, when the amount of data being
+    //  sent is large. When that happens send() breaks in asyncSendRequestImpl()
+    //  receiving an errno=EAGAIN...
+    auto response = rb.send();
+
+    // Storage for server response body...
+    std::string resultStringData;
+
+    // Verify response code, expected header, and store its body...
+    response.then(
+        [&resultStringData](Http::Response resp) {
+            // Log response code...
+            LOGGER("client", "Response code: " << resp.code());
+
+            // Log Content-Encoding header value, if present...
+            if (resp.headers().tryGetRaw("Content-Encoding").has_value())
+            {
+                LOGGER("client", "Content-Encoding: " << resp.headers().tryGetRaw("Content-Encoding").value().value());
+            }
+
+            // Preserve body only if response code as expected...
+            if (resp.code() == Http::Code::Ok)
+                resultStringData = resp.body();
+
+            // Get response headers...
+            const auto& headers = resp.headers();
+
+            // Verify Content-Encoding header was present...
+            ASSERT_TRUE(headers.has<Http::Header::ContentEncoding>());
+
+            // Verify Content-Encoding was set to deflate...
+            const auto ce = headers.get<Http::Header::ContentEncoding>().get();
+            ASSERT_EQ(ce->encoding(), Http::Header::Encoding::Deflate);
+        },
+        Async::Throw);
+
+    // Wait for response to complete...
+    Async::Barrier<Http::Response> barrier(response);
+    barrier.wait();
+
+    // Cleanup client and server...
+    client.shutdown();
+    server.shutdown();
+
+    // Get server response body in vector...
+    std::vector<std::byte> newlyCompressedResponse(resultStringData.size());
+    std::transform(
+        std::cbegin(resultStringData),
+        std::cend(resultStringData),
+        std::begin(newlyCompressedResponse),
+        [](const char character) { return static_cast<std::byte>(character); });
+
+    // The data the server responded with should be compressed, and therefore
+    //  different from the original uncompressed sent during the request...
+    ASSERT_NE(originalUncompressedData, newlyCompressedResponse);
+
+    // Decompress response body...
+
+    // Storage for decompressed data...
+    std::vector<std::byte> newlyDecompressedData(
+        originalUncompressedData.size());
+
+    // Size of destination buffer, but will be updated by uncompress() to
+    //  actual size used...
+    unsigned long destinationLength = originalUncompressedData.size();
+
+    // Decompress...
+    const auto compressionStatus = ::uncompress(
+        reinterpret_cast<unsigned char*>(newlyDecompressedData.data()),
+        &destinationLength,
+        reinterpret_cast<const unsigned char*>(resultStringData.data()),
+        resultStringData.size());
+
+    // Check for failure...
+    ASSERT_EQ(compressionStatus, Z_OK);
+
+    // The sizes of both the original uncompressed data we sent the server
+    //  and the result of decompressing what it sent back should match...
+    ASSERT_EQ(originalUncompressedData.size(), destinationLength);
+
+    // Check to ensure the compressed data received back from server after
+    //  decompression matches exactly what we originally sent it...
+    ASSERT_EQ(originalUncompressedData, newlyDecompressedData);
+}
+#endif
+
+TEST(http_server_test, http_server_is_not_leaked)
+{
+    const auto fds_before = get_open_fds_count();
+    const Pistache::Address address("localhost", Pistache::Port(0));
+
+    auto server      = std::make_unique<Http::Endpoint>(address);
+    auto flags       = Tcp::Options::ReuseAddr;
+    auto server_opts = Http::Endpoint::options().flags(flags).threads(4);
+    server->init(server_opts);
+    server->setHandler(Http::make_handler<PingHandler>());
+    server->serveThreaded();
+    server->shutdown();
+    server.reset();
+
+    const auto fds_after = get_open_fds_count();
+    ASSERT_EQ(fds_before, fds_after);
 }

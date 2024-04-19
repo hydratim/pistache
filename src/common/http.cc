@@ -22,6 +22,7 @@
 #include <iostream>
 #include <memory>
 #include <stdexcept>
+#include <string>
 #include <unordered_map>
 
 #include <fcntl.h>
@@ -344,7 +345,7 @@ namespace Pistache::Http
                 if (Header::LowercaseEqualStatic(name, "cookie"))
                 {
                     message->cookies_.removeAllCookies(); // removing existing cookies before
-                        // re-adding them.
+                                                          // re-adding them.
                     message->cookies_.addFromRaw(cursor.offset(start), cursor.diff(start));
                 }
                 else if (Header::LowercaseEqualStatic(name, "set-cookie"))
@@ -649,6 +650,28 @@ namespace Pistache::Http
 
     std::chrono::milliseconds Request::timeout() const { return timeout_; }
 
+    Header::Encoding Request::getBestAcceptEncoding() const
+    {
+        const auto& maybe_header = headers().tryGet<Header::AcceptEncoding>();
+        if (maybe_header == nullptr)
+        {
+            return Header::Encoding::Identity;
+        }
+
+        const auto& header = *maybe_header;
+
+        for (const auto& encoding : header.encodings())
+        {
+            // If the qvalue is 0, the encoding is not supported by the client
+            if (encodingSupported(encoding.first) && encoding.second != 0)
+            {
+                return encoding.first;
+            }
+        }
+
+        return Header::Encoding::Identity;
+    }
+
     Response::Response(Version version)
         : Message(version)
     { }
@@ -694,10 +717,10 @@ namespace Pistache::Http
         {
             std::ostream os(&buf_);
             /* @Todo @Major:
-     * Correctly handle non-keep alive requests
-     * Do not put Keep-Alive if version == Http::11 and request.keepAlive ==
-     * true
-     */
+             * Correctly handle non-keep alive requests
+             * Do not put Keep-Alive if version == Http::11 and request.keepAlive ==
+             * true
+             */
             // writeHeader<Header::Connection>(os, ConnectionControl::KeepAlive);
             // if (!os) throw Error("Response exceeded buffer size");
             writeHeader<Header::TransferEncoding>(os, Header::Encoding::Chunked);
@@ -828,6 +851,15 @@ namespace Pistache::Http
                                                      const size_t size,
                                                      const Mime::MediaType& mime)
     {
+        if (!peer_.expired())
+        {
+            auto curPeer = peer_.lock();
+            curPeer->setIdle(true); // change peer state to idle
+
+            // It will result in double free
+            // Http::Handler::getParser(curPeer)->reset(); // reset the timeout time
+        }
+
         response_.code_ = code;
 
         if (mime.isValid())
@@ -843,7 +875,94 @@ namespace Pistache::Http
             }
         }
 
-        return putOnWire(data, size);
+        // Compress data, if necessary, before sending over wire to user...
+        switch (contentEncoding_)
+        {
+
+#ifdef PISTACHE_USE_CONTENT_ENCODING_BROTLI
+        // User requested Brotli compression...
+        case Http::Header::Encoding::Br: {
+
+            // Location for size of compressed buffer, initially set to upper
+            //  bound on the data after its been compressed...
+            size_t compressedSize = ::BrotliEncoderMaxCompressedSize(size);
+
+            // Failed...
+            if (compressedSize == 0)
+                throw std::runtime_error("BrotliEncoderMaxCompressedSize() failed");
+
+            // Allocate a smart buffer to contain compressed data...
+            std::unique_ptr compressedData = std::make_unique<std::byte[]>(compressedSize);
+
+            // Compress data. The encoder expects compressedSize to initially be
+            //  the size of the output buffer. After it completes writing it
+            //  will update its value to reflect actual size used...
+            const auto compressionStatus = ::BrotliEncoderCompress(
+                contentEncodingBrotliLevel_,
+                BROTLI_DEFAULT_WINDOW,
+                BROTLI_DEFAULT_MODE,
+                size,
+                reinterpret_cast<const uint8_t*>(data),
+                &compressedSize,
+                reinterpret_cast<uint8_t*>(compressedData.get()));
+
+            // Failed...
+            if (compressionStatus != BROTLI_TRUE)
+                throw std::runtime_error("BrotliEncoderCompress() failed");
+
+            // Notify client to expect Brotli compressed response...
+            headers().add<Http::Header::ContentEncoding>(
+                Http::Header::Encoding::Br);
+
+            // Send compressed data back to client...
+            return putOnWire(
+                reinterpret_cast<const char*>(compressedData.get()),
+                compressedSize);
+        }
+#endif
+
+#ifdef PISTACHE_USE_CONTENT_ENCODING_DEFLATE
+        // User requested deflate compression...
+        case Http::Header::Encoding::Deflate: {
+
+            // Compute upper bound on size of expected compressed data. This
+            //  will be updated by compress2()...
+            uLongf compressedSize = ::compressBound(size);
+
+            // Allocate a smart buffer to contain compressed data...
+            std::unique_ptr compressedData = std::make_unique<std::byte[]>(compressedSize);
+
+            // Compress user data at requested level...
+            const auto compressionStatus = ::compress2(
+                reinterpret_cast<unsigned char*>(compressedData.get()),
+                &compressedSize,
+                reinterpret_cast<const unsigned char*>(data),
+                size,
+                contentEncodingDeflateLevel_);
+
+            // Failed...
+            if (compressionStatus != Z_OK)
+                throw std::runtime_error(
+                    std::string("compress2() failed, returning: ") + std::to_string(compressionStatus));
+
+            // Notify client to expect deflate compressed response...
+            headers().add<Http::Header::ContentEncoding>(
+                Http::Header::Encoding::Deflate);
+
+            // Send compressed data back to client...
+            return putOnWire(
+                reinterpret_cast<const char*>(compressedData.get()),
+                compressedSize);
+        }
+#endif
+        // No compression requested. Send uncompressed data to client...
+        case Http::Header::Encoding::Identity:
+            return putOnWire(data, size);
+
+        // Unknown...
+        default:
+            throw std::runtime_error("User requested unknown content encoding.");
+        }
     }
 
     ResponseStream ResponseWriter::stream(Code code, size_t streamSize)
@@ -909,10 +1028,10 @@ namespace Pistache::Http
             OUT(writeCookies(response_.cookies(), buf_));
 
             /* @Todo @Major:
-     * Correctly handle non-keep alive requests
-     * Do not put Keep-Alive if version == Http::11 and request.keepAlive ==
-     * true
-     */
+             * Correctly handle non-keep alive requests
+             * Do not put Keep-Alive if version == Http::11 and request.keepAlive ==
+             * true
+             */
             // OUT(writeHeader<Header::Connection>(os, ConnectionControl::KeepAlive));
             OUT(writeHeader<Header::ContentLength>(os, len));
 
@@ -946,6 +1065,39 @@ namespace Pistache::Http
         catch (const std::runtime_error& e)
         {
             return Async::Promise<ssize_t>::rejected(e);
+        }
+    }
+
+    // Compress using the requested content encoding, if supported, before
+    //  sending bits to client. User responsible for setting Content-Encoding
+    //  header...
+    void ResponseWriter::setCompression(const Pistache::Http::Header::Encoding _contentEncoding)
+    {
+        switch (_contentEncoding)
+        {
+
+#ifdef PISTACHE_USE_CONTENT_ENCODING_BROTLI
+        // Application requested Brotli compression...
+        case Http::Header::Encoding::Br:
+            contentEncoding_ = Http::Header::Encoding::Br;
+            break;
+#endif
+
+#ifdef PISTACHE_USE_CONTENT_ENCODING_DEFLATE
+        // Application requested deflate compression...
+        case Http::Header::Encoding::Deflate:
+            contentEncoding_ = Http::Header::Encoding::Deflate;
+            break;
+#endif
+
+        // Application requested identity encoding which means no compression...
+        case Http::Header::Encoding::Identity:
+            contentEncoding_ = Http::Header::Encoding::Identity;
+            break;
+
+        // Any other type is not supported...
+        default:
+            throw std::runtime_error("Unsupported content encoding compression requested.");
         }
     }
 
@@ -1103,6 +1255,7 @@ namespace Pistache::Http
                     response.headers().add<Header::Connection>(ConnectionControl::Close);
                 }
 
+                peer->setIdle(false); // change peer state to not idle
                 onRequest(request, std::move(response));
                 parser->reset();
             }

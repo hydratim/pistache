@@ -31,33 +31,47 @@ pistache_client_src = [
 	'client'/'client.cc'
 ]
 
+public_args = []
+
 if get_option('PISTACHE_USE_SSL')
-	add_project_arguments('-DPISTACHE_USE_SSL', language: 'cpp')
+	public_args += '-DPISTACHE_USE_SSL'
+endif
+
+if get_option('PISTACHE_USE_CONTENT_ENCODING_BROTLI')
+	public_args += '-DPISTACHE_USE_CONTENT_ENCODING_BROTLI'
+endif
+
+if get_option('PISTACHE_USE_CONTENT_ENCODING_DEFLATE')
+	public_args += '-DPISTACHE_USE_CONTENT_ENCODING_DEFLATE'
 endif
 
 libpistache = library(
 	'pistache',
 	sources: pistache_common_src + pistache_server_src + pistache_client_src,
+	cpp_args: public_args,
 	include_directories: incl_pistache,
 	dependencies: deps_libpistache,
 	install: get_option('PISTACHE_INSTALL'),
-	version: pistache_version_str,
-	soversion: pistache_soversion_str,
+	version: version_str,
 	pic: get_option('b_staticpic')
 )
 
-pistache_dep = declare_dependency(link_with: libpistache, include_directories: incl_pistache)
+pistache_dep = declare_dependency(
+	compile_args: public_args,
+	include_directories: incl_pistache,
+	link_with: libpistache
+)
 
 if meson.version().version_compare('>=0.54.0')
 	meson.override_dependency('libpistache', pistache_dep)
 endif
 
-pkg = import('pkgconfig')
-pkg.generate(
-   libpistache,
-   name: 'Pistache',
-   description: 'An elegant C++ REST framework.',
-   url: 'http://pistache.io',
-   version: pistache_version_str+'-git'+version_data_conf.get_unquoted('VERSION_GIT_DATE'),
-   filebase: 'libpistache'
+import('pkgconfig').generate(
+	libpistache,
+	name: 'Pistache',
+	description: 'An elegant C++ REST framework',
+	url: 'https://pistacheio.github.io/pistache/',
+	version: '@0@-git@1@'.format(version_str, version_git_date),
+	filebase: 'libpistache',
+	extra_cflags: public_args
 )
